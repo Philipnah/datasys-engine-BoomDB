@@ -4,8 +4,8 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>dk.itu.BoomDB</groupId>
-  <artifactId>BoomEngine</artifactId>
+  <groupId>dk.itu.boomdb</groupId>
+  <artifactId>boomengine</artifactId>
   <version>0.1.0</version>
   <packaging>jar</packaging>
 
@@ -65,7 +65,7 @@
         <artifactId>exec-maven-plugin</artifactId>
         <version>3.6.3</version>
         <configuration>
-          <mainClass>dk.itu.datasys.Engine</mainClass>
+          <mainClass>dk.itu.boomdb.Engine</mainClass>
         </configuration>
       </plugin>
     </plugins>
