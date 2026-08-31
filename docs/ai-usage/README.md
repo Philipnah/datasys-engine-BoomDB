@@ -1,7 +1,9 @@
-# AI-assisted code learning log
+# Code-change learning log
 
 Create one entry for every AI-assisted tracked change to production code,
-tests, build/configuration, or scripts. Do not create entries for
+tests, build/configuration, or scripts. Also create an entry when a contributor
+explicitly asks to record a human-authored tracked code change. Do not create
+entries automatically for unaided changes, and do not create entries for
 explanation-only conversations, plans, or tasks that make no tracked code
 change.
 
@@ -13,19 +15,20 @@ attribution section.
 Use this template:
 
 ```markdown
-# AI-assisted change: <short title>
+# Code change: <short title>
 
 - Date: YYYY-MM-DD
 - Contributor: <name or Git user name>
-- AI tool/model: <tool and model, if known>
+- Assistance: AI-assisted | Human-authored, logged on request
+- AI tool/model: <tool and model, if known; otherwise N/A>
 
 ## Request summary
 
 <One sanitized paragraph describing what was asked. Do not paste the raw prompt.>
 
-## AI response and implementation summary
+## Change and assistance summary
 
-<What the AI proposed or changed, and the resulting behaviour.>
+<What changed, the resulting behaviour, and—if used—what the AI contributed.>
 
 ## Changed files
 

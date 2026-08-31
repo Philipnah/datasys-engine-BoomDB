@@ -50,8 +50,9 @@ client needs explicit setup should register that directory with the client.
   Course requirements, correctness, this guide, and explicit user requests
   take precedence over its minimalism.
 - Use `ai-usage-log` whenever AI assists a tracked change to production code,
-  tests, build/configuration, or scripts. It does not apply to explanation-only
-  conversations or tasks with no tracked code change.
+  tests, build/configuration, or scripts. Also use it when a contributor
+  explicitly asks to record a human-authored tracked code change. It does not
+  apply to explanation-only conversations or tasks with no tracked code change.
 
 For covered work, create one entry in `docs/ai-usage/` after implementation
 and validation, commit it with the change, and link it from the pull request.
