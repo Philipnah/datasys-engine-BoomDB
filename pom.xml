@@ -12,6 +12,7 @@
   <properties>
     <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <jackson.version>2.22.2</jackson.version>
     <log4j.version>2.26.1</log4j.version>
   </properties>
 
@@ -34,6 +35,12 @@
       <artifactId>log4j-core</artifactId>
       <version>${log4j.version}</version>
       <scope>runtime</scope>
+    </dependency>
+    <!-- JSON catalog persistence; data files use BoomDB's own binary format. -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version>
     </dependency>
     <!-- Testing -->
     <dependency>
@@ -58,6 +65,20 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.5.6</version>
+      </plugin>
+      <!-- Runs *IT integration tests during the verify phase. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-failsafe-plugin</artifactId>
+        <version>3.5.6</version>
+        <executions>
+          <execution>
+            <goals>
+              <goal>integration-test</goal>
+              <goal>verify</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
       <!-- Lets `mvn exec:java` start the engine -->
       <plugin>

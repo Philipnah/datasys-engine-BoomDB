@@ -7,7 +7,7 @@ Choice:
         (1) it is a more complex implementation, 
         (2) you might need to do more I/O operations when join multiple tables.
     - The catalog files should be in JSON, because it's easy to read and easy to develop (for educational purposes). A disadvantage is that it is slower than binary.
-    - We have two directories: /catalogs & /data. catalog/table-name.json and data/table-name.bin.
+    - We have two directories under the configured data directory: `catalogs/` and `data/`. A table uses `catalogs/<table-name>.json`; each of its partitions uses `data/<table-name>-<partition>.bin`.
 
 
 2. **Catalog contents:** per table, at least the schema and the list of data files and partitions that belong to it.
@@ -29,9 +29,9 @@ Choice:
 
 5. **Layout inside a partition:** choose either row-wise or columnar format.
 Choice:
-    - We decided to go with the PAX partitioning. By choosing this approach we get best of both worlds while not specializing at any specific workload.
-    - We decided to do one file per partition.
-    - Row-wise tables in column-wise partitions.
+    - We decided to go with PAX partitioning. Each table consists of row groups (partitions), while values inside each partition file are grouped into one chunk per column. This keeps rows together at the partition level while allowing column-oriented access inside a partition.
+    - We decided to use one file per partition, named `data/<table-name>-<partition>.bin`.
+    - The file header contains the row and column counts and an offset/length entry for every column chunk, so a reader can locate a particular chunk directly.
 
 6. **Partition size:** maximum rows per partition, as a configurable parameter (your tests will use tiny values like 2; pick a sensible default).
 Choice:
@@ -40,10 +40,17 @@ Choice:
 
 7. **Value encodings and framing:** e.g. `LONG` as 8-byte two's-complement, `DOUBLE` as 8-byte IEEE 754, `STRING` as length-prefixed ASCII bytes; magic bytes and a format version number at the start of each file; how a reader finds a given partition's column chunk.
 Choice:
-    - We will use standard Java encoding and framing for 'LONG', 'DOUBLE' and 'STRING'. 
-    - As well as magic bytes and a format version number at the start of each file.
+    - Each partition starts with the four ASCII magic bytes `BDBP`, followed by format version `1`, the row count, the column count, and the offset and length of every column chunk.
+    - `LONG` uses an 8-byte two's-complement value, `DOUBLE` uses its 8-byte IEEE 754 representation, and `STRING` uses a 4-byte byte-length followed by ASCII bytes.
+    - Catalog JSON stores min/max values as text and uses the schema's column type to decode them after a restart.
 
 
 8. **Byte order:** `ByteBuffer` defaults to big-endian, while the machines you run on are little-endian. Pick one and document the choice.
 Choice:
-    - We decided to go with Little-E because it matches our hardware.
+    - We decided to use little-endian byte order because it matches our hardware. All multi-byte values in partition files, including lengths and offsets, use little-endian order.
+
+## API details
+
+- `StorageEngine(Path)` uses the default maximum of 100 rows per partition. `StorageEngine(Path, int)` allows tests and callers to configure the maximum and rejects non-positive values.
+- `lastScanStats()` returns the `ScanStats` produced by the most recent `select` call.
+- Catalog JSON is read and written with Jackson rather than a hand-written JSON parser. The exercise explicitly permits a JSON library for the catalog, and using one keeps escaping and validation reliable.
