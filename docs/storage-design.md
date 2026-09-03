@@ -21,26 +21,29 @@ Choice:
 
 3. **Where the min/max summaries live.** The requirement is only that they exist per column per partition and that `select` can consult them without reading the column data they describe. Three designs are defensible. A **footer** after the data is Parquet's choice and is natural for a single-pass writer. A **header** at the front is convenient for the reader, but the writer must buffer the partition or seek back to fill it in. **In the catalog only** means that pruning needs no data-file I/O at all, as in Snowflake and Iceberg, but a data file is then no longer self-describing. Pick one and justify it.
 Choice:
-    - 
+    - As described in point 2, we want to store the stats (min/max) directly in the catalog files. This gives us the advantage of not having to do additional I/O of files when pruning. And as an arguable disadvantage, the data file is not self-describing.
 
 4. **Restart:** what does a fresh `StorageEngine` on the same directory have to read before it can answer a `select`?
 Choice:
-    - 
+    -  It needs to go to a catalog directory. Find the catalog file for the table. Read the catalog file and fetch relevant data from the table in the data directory.  
 
 5. **Layout inside a partition:** choose either row-wise or columnar format.
 Choice:
-    - 
+    - We decided to go with the PAX partitioning. By choosing this approach we get best of both worlds while not specializing at any specific workload.
+    - We decided to do one file per partition.
+    - Row-wise tables in column-wise partitions.
 
 6. **Partition size:** maximum rows per partition, as a configurable parameter (your tests will use tiny values like 2; pick a sensible default).
 Choice:
-    - 
+    - 100 rows as a default. Make it configurable. 100 as a default will make it easier to see the system work. 
 
 
 7. **Value encodings and framing:** e.g. `LONG` as 8-byte two's-complement, `DOUBLE` as 8-byte IEEE 754, `STRING` as length-prefixed ASCII bytes; magic bytes and a format version number at the start of each file; how a reader finds a given partition's column chunk.
 Choice:
-    - 
+    - We will use standard Java encoding and framing for 'LONG', 'DOUBLE' and 'STRING'. 
+    - As well as magic bytes and a format version number at the start of each file.
 
 
 8. **Byte order:** `ByteBuffer` defaults to big-endian, while the machines you run on are little-endian. Pick one and document the choice.
 Choice:
-    - 
+    - We decided to go with Little-E because it matches our hardware.
