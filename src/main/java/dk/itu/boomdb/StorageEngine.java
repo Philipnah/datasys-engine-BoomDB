@@ -11,6 +11,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -71,8 +72,10 @@ public final class StorageEngine {
             if (catalogStore.load(tableName).isPresent()) {
                 throw new IllegalArgumentException("table already exists: " + tableName);
             }
+
             validateColumns(columns);
             catalogStore.save(new TableCatalog(tableName, List.copyOf(columns), false, List.of()));
+            
             LOGGER.debug("table={} columns={} durationMs={}", clean(tableName), columns.size(),
                     elapsedMillis(started));
         } catch (RuntimeException error) {
@@ -90,7 +93,7 @@ public final class StorageEngine {
      * @throws UnsupportedOperationException if the table has already been copied into
      */
     public void copyFile(String tableName, String csvFilePath) {
-        long started = System.nanoTime();
+        long logStarted = System.nanoTime();
         try {
             TableCatalog table = requireTable(tableName);
             if (table.copied()) {
@@ -100,16 +103,24 @@ public final class StorageEngine {
             Path csv = Path.of(csvFilePath);
             List<Object[]> rows = readCsv(csv, table.columns());
             List<PartitionMetadata> partitions = new ArrayList<>();
-
+            
+            // the start variable is always the first row of the partition
             for (int start = 0; start < rows.size(); start += maxRowsPerPartition) {
+                // the end variable is always the last row of the partition
                 int end = Math.min(start + maxRowsPerPartition, rows.size());
+
                 List<Object[]> partitionRows = rows.subList(start, end);
                 int partitionId = partitions.size();
                 String fileName = tableName + "-" + partitionId + ".bin";
+                
+                // Compute statistics for each column in the partition
                 List<ColumnStatistics> statistics = statisticsFor(
                         tableName, partitionId, table.columns(), partitionRows);
+
+                // Write the partition to disk
                 StorageSupport.writePartition(
                         partitionPath(fileName), table.columns(), partitionRows);
+
                 partitions.add(new PartitionMetadata(
                         partitionId, fileName, partitionRows.size(), statistics));
             }
@@ -118,14 +129,14 @@ public final class StorageEngine {
                     table.tableName(), table.columns(), true, List.copyOf(partitions)));
             LOGGER.debug("table={} file={} rows={} partitions={} durationMs={}",
                     clean(tableName), clean(csv.getFileName()), rows.size(), partitions.size(),
-                    elapsedMillis(started));
+                    elapsedMillis(logStarted));
         } catch (IOException error) {
             UncheckedIOException unchecked =
                     new UncheckedIOException("cannot write partitions for " + csvFilePath, error);
-            logFailure("COPY", tableName, started, unchecked);
+            logFailure("COPY", tableName, logStarted, unchecked);
             throw unchecked;
         } catch (RuntimeException error) {
-            logFailure("COPY", tableName, started, error);
+            logFailure("COPY", tableName, logStarted, error);
             throw error;
         }
     }
@@ -259,10 +270,10 @@ public final class StorageEngine {
         List<Object[]> rows = new ArrayList<>();
         try (BufferedReader reader = Files.newBufferedReader(csv, StandardCharsets.US_ASCII)) {
             String line;
-            int lineNumber = 0;
+            int lineNumber = 1;
             while ((line = reader.readLine()) != null) {
-                lineNumber++;
                 rows.add(StorageSupport.parseCsvLine(csv, lineNumber, line, columns));
+                lineNumber++;
             }
             return rows;
         } catch (IOException error) {

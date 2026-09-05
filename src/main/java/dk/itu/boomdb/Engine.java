@@ -22,6 +22,22 @@ public final class Engine {
      * @param args ignored command-line arguments
      */
     public static void main(String[] args) {
+        // TODO: For AI: do not implement this yet, wait until explicitly told to do so
+        // Setup before program loop
+        // 1. startup logger
+        // 2. check if database exists
+        // 3. if not make new
+
+        // Program loop
+            // 1. wait for user input
+            // 2. receive SQL from user
+            // 3. Parse sql
+            // 4. do the operations
+            // 5. go back to waiting for user input
+
+            // User exits program and program ends
+
+
         MDC.put("sessionId", UUID.randomUUID().toString());
         MDC.put("statementNumber", "0");
         LOGGER.debug("engine started");

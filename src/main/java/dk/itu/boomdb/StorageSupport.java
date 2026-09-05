@@ -13,6 +13,7 @@ import java.util.List;
 
 /** Package-private binary and predicate operations used by the storage engine. */
 final class StorageSupport {
+    // The MAGIC bytes are the signature of a BoomDB partition file
     private static final byte[] MAGIC = {'B', 'D', 'B', 'P'};
     private static final int FORMAT_VERSION = 1;
     private static final int FIXED_HEADER_BYTES = MAGIC.length + 3 * Integer.BYTES;
@@ -20,6 +21,7 @@ final class StorageSupport {
 
     private StorageSupport() { }
 
+    /** Encodes a value of the specified type into a byte array. */
     static byte[] encodeValue(ColumnType type, Object value) {
         requireValueType(type, value);
         return switch (type) {
@@ -101,6 +103,11 @@ final class StorageSupport {
         }
     }
 
+    // This way of storing data, means that we cannot efficiently update a string to a larger string, 
+    // because the exact amount of space is allocated for each string.
+    // In this course we deal with immutable data, so this is not a problem.
+    // INFO: One way of solving this is to store updates separately for a certain number of strings, 
+    // until a threshold is reached, then update all the string in a partition that have been updated.
     static void writePartition(Path target, List<ColumnSpec> columns,
             List<Object[]> rows) throws IOException {
         List<byte[]> chunks = new ArrayList<>(columns.size());
@@ -119,6 +126,7 @@ final class StorageSupport {
                 Math.multiplyExact(columns.size(), COLUMN_DIRECTORY_BYTES));
         ByteBuffer header = ByteBuffer.allocate(headerSize).order(LITTLE_ENDIAN);
         header.put(MAGIC).putInt(FORMAT_VERSION).putInt(rows.size()).putInt(columns.size());
+
         long offset = headerSize;
         for (byte[] chunk : chunks) {
             header.putLong(offset).putLong(chunk.length);
