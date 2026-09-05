@@ -1,16 +1,16 @@
 package dk.itu.boomdb;
 
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Stream;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -130,8 +130,8 @@ class StorageEngineIT {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
                 () -> engine.copyFile("trips", csv.toString()));
 
-        assertEquals(true, error.getMessage().contains(csv.toString()));
-        assertEquals(true, error.getMessage().contains("line 2"));
+        assertTrue(error.getMessage().contains(csv.toString()));
+        assertTrue(error.getMessage().contains("line 2"));
         assertFalse(new CatalogStore(directory).load("trips").orElseThrow().copied());
         assertEquals(0, Files.list(directory.resolve("data")).count());
     }
@@ -146,8 +146,8 @@ class StorageEngineIT {
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
                 () -> engine.copyFile("trips", csv.toString()));
 
-        assertEquals(true, error.getMessage().contains(csv.toString()));
-        assertEquals(true, error.getMessage().contains("line 1"));
+        assertTrue(error.getMessage().contains(csv.toString()));
+        assertTrue(error.getMessage().contains("line 1"));
         assertFalse(new CatalogStore(directory).load("trips").orElseThrow().copied());
         assertEquals(0, Files.list(directory.resolve("data")).count());
     }
