@@ -12,6 +12,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
+
 /** Runs the Exercise 2 golden-data demonstration. */
 public final class Engine {
     private static final Logger LOGGER = LoggerFactory.getLogger(Engine.class);
@@ -48,7 +51,48 @@ public final class Engine {
     }
 
     private static void printRows(String label, List<Object[]> rows) {
-        System.out.println(label + " (" + rows.size() + " rows)");
-        rows.forEach(row -> System.out.println(Arrays.toString(row)));
+        System.out.println("\n" + label + " (" + rows.size() + " rows)");
+
+        if (rows.isEmpty()) {
+            System.out.println("┌──────────┐\n│ (empty)  │\n└──────────┘");
+            return;
+        }
+
+        // Determine the maximum number of columns across all rows
+        int colCount = rows.stream().mapToInt(r -> r.length).max().orElse(0);
+
+        // Calculate maximum string width for each column
+        int[] colWidths = new int[colCount];
+        for (Object[] row : rows) {
+            for (int i = 0; i < row.length; i++) {
+                String val = row[i] == null ? "NULL" : row[i].toString();
+                colWidths[i] = Math.max(colWidths[i], val.length());
+            }
+        }
+
+        // Build separators
+        String topBorder = IntStream.range(0, colCount)
+                .mapToObj(i -> "─".repeat(colWidths[i] + 2))
+                .collect(Collectors.joining("┬", "┌", "┐"));
+
+        String bottomBorder = IntStream.range(0, colCount)
+                .mapToObj(i -> "─".repeat(colWidths[i] + 2))
+                .collect(Collectors.joining("┴", "└", "┘"));
+
+        // Print top frame
+        System.out.println(topBorder);
+
+        // Print data rows
+        for (Object[] row : rows) {
+            StringBuilder sb = new StringBuilder("│");
+            for (int i = 0; i < colCount; i++) {
+                String val = (i < row.length && row[i] != null) ? row[i].toString() : (i < row.length ? "NULL" : "");
+                sb.append(String.format(" %-" + colWidths[i] + "s │", val));
+            }
+            System.out.println(sb);
+        }
+
+        // Print bottom frame
+        System.out.println(bottomBorder);
     }
 }
