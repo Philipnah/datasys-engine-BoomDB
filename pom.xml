@@ -12,11 +12,17 @@
   <properties>
     <maven.compiler.release>25</maven.compiler.release>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <antlr.version>4.13.2</antlr.version>
     <jackson.version>2.22.2</jackson.version>
     <log4j.version>2.26.1</log4j.version>
   </properties>
 
   <dependencies>
+    <dependency>
+      <groupId>org.antlr</groupId>
+      <artifactId>antlr4-runtime</artifactId>
+      <version>${antlr.version}</version>
+    </dependency>
     <!-- Logging API: your code compiles only against SLF4J -->
     <dependency>
       <groupId>org.slf4j</groupId>
@@ -53,6 +59,21 @@
 
   <build>
     <plugins>
+      <plugin>
+        <groupId>org.antlr</groupId>
+        <artifactId>antlr4-maven-plugin</artifactId>
+        <version>${antlr.version}</version>
+        <configuration>
+          <visitor>true</visitor>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>antlr4</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
       <!-- Compiles with the Java release set above. Pinned because the version
            Maven picks by default is too old to understand `maven.compiler.release`. -->
       <plugin>

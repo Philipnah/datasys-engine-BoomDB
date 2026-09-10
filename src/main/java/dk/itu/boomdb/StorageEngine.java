@@ -85,6 +85,17 @@ public final class StorageEngine {
     }
 
     /**
+     * Returns a table's schema in column order.
+     *
+     * @param tableName table whose schema to return
+     * @return immutable ordered column definitions
+     * @throws IllegalArgumentException if the table is unknown
+     */
+    public List<ColumnSpec> schema(String tableName) {
+        return List.copyOf(requireTable(tableName).columns());
+    }
+
+    /**
      * Loads one headerless CSV file into newly written table partitions.
      *
      * @param tableName destination table
@@ -216,7 +227,7 @@ public final class StorageEngine {
         return lastScanStats;
     }
 
-    private static void validateColumns(List<ColumnSpec> columns) {
+    static void validateColumns(List<ColumnSpec> columns) {
         if (columns == null || columns.isEmpty()) {
             throw new IllegalArgumentException("table must have at least one column");
         }
@@ -246,7 +257,7 @@ public final class StorageEngine {
         throw new IllegalArgumentException("unknown column: " + columnName);
     }
 
-    private static void requireConstantType(ColumnType type, Object constant) {
+    static void requireConstantType(ColumnType type, Object constant) {
         Class<?> expected = switch (type) {
             case STRING -> String.class;
             case LONG -> Long.class;

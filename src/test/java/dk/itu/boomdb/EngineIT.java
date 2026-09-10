@@ -3,12 +3,35 @@ package dk.itu.boomdb;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class EngineIT {
+    @Test
+    void printsTheFourRequiredSqlStatements() {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        PrintStream originalOutput = System.out;
+        try {
+            System.setOut(new PrintStream(output, true, StandardCharsets.UTF_8));
+
+            Engine.main(new String[0]);
+        } finally {
+            System.setOut(originalOutput);
+        }
+
+        assertEquals("""
+                CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
+                COPY trips FROM 'trips.csv';
+                SELECT * FROM trips WHERE distance > 100;
+                SELECT * FROM trips;
+                """, output.toString(StandardCharsets.UTF_8).replace("\r\n", "\n"));
+    }
+
     @Test
     void selectsTheThreeGoldenQueryResults(@TempDir Path directory) {
         // Keep the golden example independent of the demo's console output.

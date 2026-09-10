@@ -1,10 +1,5 @@
 package dk.itu.boomdb;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -15,12 +10,12 @@ import org.slf4j.MDC;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-/** Runs the Exercise 2 golden-data demonstration. */
+/** Runs the Exercise 3 SQL parsing demonstration. */
 public final class Engine {
     private static final Logger LOGGER = LoggerFactory.getLogger(Engine.class);
 
     /**
-     * Copies the golden trip data and prints the three required filtered results.
+     * Parses and prints the four required SQL statements without executing them.
      *
      * @param args ignored command-line arguments
      */
@@ -45,22 +40,16 @@ public final class Engine {
         MDC.put("statementNumber", "0");
         LOGGER.debug("engine started");
         try {
-            Path dataDirectory = Files.createTempDirectory("boomdb-demo-");
-            StorageEngine storage = new StorageEngine(dataDirectory);
-            storage.createTable("trips", List.of(
-                    new ColumnSpec("city", ColumnType.STRING),
-                    new ColumnSpec("distance", ColumnType.LONG),
-                    new ColumnSpec("price", ColumnType.DOUBLE)));
-            storage.copyFile("trips", "src/test/resources/trips.csv");
-
-            printRows("distance GREATER_THAN 100",
-                    storage.select("trips", "distance", Comparison.GREATER_THAN, 100L));
-            printRows("city EQUALS Copenhagen",
-                    storage.select("trips", "city", Comparison.EQUALS, "Copenhagen"));
-            printRows("price LESS_THAN 50.0",
-                    storage.select("trips", "price", Comparison.LESS_THAN, 50.0));
-        } catch (IOException error) {
-            throw new UncheckedIOException("cannot create demo data directory", error);
+            String sql = """
+                    CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
+                    COPY trips FROM 'trips.csv';
+                    SELECT * FROM trips WHERE distance > 100;
+                    SELECT * FROM trips; -- no where clause
+                    """;
+            SqlPrinter printer = new SqlPrinter();
+            for (Statement statement : new SqlParser().parse(sql)) {
+                System.out.println(printer.print(statement));
+            }
         } finally {
             LOGGER.debug("engine stopped");
         }
