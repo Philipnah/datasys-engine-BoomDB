@@ -35,7 +35,7 @@ Choice:
 
 6. **Partition size:** maximum rows per partition, as a configurable parameter (your tests will use tiny values like 2; pick a sensible default).
 Choice:
-    - 100 rows as a default. Make it configurable. 100 as a default will make it easier to see the system work. 
+    - 10,000 rows as a default. Make it configurable. 10,000 as a default will make it easier to see the system work. 
 
 
 7. **Value encodings and framing:** e.g. `LONG` as 8-byte two's-complement, `DOUBLE` as 8-byte IEEE 754, `STRING` as length-prefixed ASCII bytes; magic bytes and a format version number at the start of each file; how a reader finds a given partition's column chunk.
@@ -51,6 +51,6 @@ Choice:
 
 ## API details
 
-- `StorageEngine(Path)` uses the default maximum of 100 rows per partition. `StorageEngine(Path, int)` allows tests and callers to configure the maximum and rejects non-positive values.
+- `StorageEngine(Path)` uses the default maximum of 10,000 rows per partition. `StorageEngine(Path, int)` allows tests and callers to configure the maximum and rejects non-positive values.
 - `lastScanStats()` returns the `ScanStats` produced by the most recent `select` call.
 - Catalog JSON is read and written with Jackson rather than a hand-written JSON parser. The exercise explicitly permits a JSON library for the catalog, and using one keeps escaping and validation reliable.

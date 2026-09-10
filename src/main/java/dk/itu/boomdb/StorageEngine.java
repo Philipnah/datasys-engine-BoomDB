@@ -19,7 +19,7 @@ import org.slf4j.MDC;
 /** Stores typed tables in persistent PAX partitions and scans them with min/max pruning. */
 public final class StorageEngine {
     private static final Logger LOGGER = LoggerFactory.getLogger(StorageEngine.class);
-    private static final int DEFAULT_MAX_ROWS_PER_PARTITION = 100;
+    private static final int DEFAULT_MAX_ROWS_PER_PARTITION = 10_000;
 
     private final CatalogStore catalogStore;
     private final Path partitionDirectory;
@@ -27,7 +27,7 @@ public final class StorageEngine {
     private ScanStats lastScanStats = new ScanStats(0, 0, 0);
 
     /**
-     * Opens or creates persistent storage with partitions of at most 100 rows.
+     * Opens or creates persistent storage with partitions of at most 10,000 rows.
      *
      * @param dataDirectory root directory for catalogs and partition files
      */
