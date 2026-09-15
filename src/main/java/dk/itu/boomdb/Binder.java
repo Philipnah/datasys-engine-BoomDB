@@ -24,6 +24,9 @@ public final class Binder {
      * @throws IllegalArgumentException if a referenced name or value type is invalid
      */
     public void bind(Statement statement) {
+        /*
+          We check if the table exists in a requireTable() function, which is called when we use 'engine.schema()'
+        */
         switch (statement) {
             case CreateTableStatement create -> StorageEngine.validateColumns(create.columns());
             case CopyStatement copy -> engine.schema(copy.tableName());
