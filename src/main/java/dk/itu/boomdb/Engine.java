@@ -44,7 +44,7 @@ public final class Engine {
                     CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
                     COPY trips FROM 'trips.csv';
                     SELECT * FROM trips WHERE distance > 100;
-                    SELECT * FROM trips; -- no where clause
+                    SELECT * FROM trips;
                     """;
             SqlPrinter printer = new SqlPrinter();
             for (Statement statement : new SqlParser().parse(sql)) {
