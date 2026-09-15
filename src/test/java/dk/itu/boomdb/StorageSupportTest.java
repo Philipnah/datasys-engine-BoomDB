@@ -141,6 +141,55 @@ class StorageSupportTest {
         assertArrayEquals(rows.get(1), restored.get(1));
     }
 
+    @ParameterizedTest
+    @MethodSource("selectiveReadCases")
+    void selectiveReaderReturnsMatchingRowsInDiskOrder(
+            int columnIndex, Comparison comparison, Object constant, int[] expectedIndexes,
+            @TempDir Path directory) throws Exception {
+        List<Object[]> rows = List.of(
+                new Object[] {"Copenhagen", 12L, 23.5},
+                new Object[] {"Aarhus", 187L, 301.0},
+                new Object[] {"Odense", 95L, 120.75},
+                new Object[] {"Copenhagen", 140L, 210.0});
+        Path partition = directory.resolve("trips-0.bin");
+        StorageSupport.writePartition(partition, TRIP_COLUMNS, rows);
+
+        List<Object[]> actual = StorageSupport.readMatchingRows(
+                partition, TRIP_COLUMNS, columnIndex, comparison, constant);
+
+        assertEquals(expectedIndexes.length, actual.size());
+        for (int index = 0; index < expectedIndexes.length; index++) {
+            assertArrayEquals(rows.get(expectedIndexes[index]), actual.get(index));
+        }
+    }
+
+    private static Stream<Arguments> selectiveReadCases() {
+        return Stream.of(
+                Arguments.of(0, Comparison.EQUALS, "Copenhagen", new int[] {0, 3}),
+                Arguments.of(1, Comparison.GREATER_THAN, 100L, new int[] {1, 3}),
+                Arguments.of(2, Comparison.LESS_THAN, 50.0, new int[] {0}));
+    }
+
+    @Test
+    void selectiveReaderSkipsUnneededColumnDataWhenThereAreNoMatches(
+            @TempDir Path directory) throws Exception {
+        List<Object[]> rows = List.of(
+                new Object[] {"Copenhagen", 12L, 23.5},
+                new Object[] {"Aarhus", 187L, 301.0});
+        Path partition = directory.resolve("trips-0.bin");
+        StorageSupport.writePartition(partition, TRIP_COLUMNS, rows);
+        byte[] bytes = Files.readAllBytes(partition);
+        int cityChunkOffset = Math.toIntExact(ByteBuffer.wrap(bytes).order(LITTLE_ENDIAN)
+                .getLong(4 * Integer.BYTES));
+        ByteBuffer.wrap(bytes).order(LITTLE_ENDIAN).putInt(cityChunkOffset, Integer.MAX_VALUE);
+        Files.write(partition, bytes);
+
+        List<Object[]> actual = StorageSupport.readMatchingRows(
+                partition, TRIP_COLUMNS, 1, Comparison.EQUALS, -1L);
+
+        assertTrue(actual.isEmpty());
+    }
+
     private static Object roundTrip(ColumnType type, Object value) {
         byte[] encoded = StorageSupport.encodeValue(type, value);
         return StorageSupport.decodeValue(type, ByteBuffer.wrap(encoded).order(LITTLE_ENDIAN));
