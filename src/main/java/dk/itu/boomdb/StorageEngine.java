@@ -193,13 +193,11 @@ public final class StorageEngine {
 
                 partitionsRead++;
                 try {
-                    for (Object[] row : StorageSupport.readPartition(
-                            partitionPath(partition.fileName()), table.columns())) {
-                        if (StorageSupport.matches(
-                                column.type(), comparison, row[columnIndex], constant)) {
-                            result.add(row);
-                        }
-                    }
+                    // Scan the PAX predicate chunk before materializing rows so values from
+                    // discarded rows are neither decoded nor allocated.
+                    result.addAll(StorageSupport.readMatchingRows(
+                            partitionPath(partition.fileName()), table.columns(), columnIndex,
+                            comparison, constant));
                 } catch (IOException error) {
                     throw new UncheckedIOException(
                             "cannot read partition " + partition.fileName(), error);
