@@ -169,7 +169,7 @@ public final class StorageEngine {
             TableCatalog table = requireTable(tableName);
             int columnIndex = columnIndex(table, columnName);
             ColumnSpec column = table.columns().get(columnIndex);
-            requireConstantType(column.type(), constant);
+            requireConstantType(tableName, columnName, column.type(), constant);
             if (comparison == null) {
                 throw new IllegalArgumentException("comparison is required");
             }
@@ -257,15 +257,17 @@ public final class StorageEngine {
         throw new IllegalArgumentException("unknown column: " + columnName);
     }
 
-    static void requireConstantType(ColumnType type, Object constant) {
+    static void requireConstantType(
+            String tableName, String columnName, ColumnType type, Object constant) {
         Class<?> expected = switch (type) {
             case STRING -> String.class;
             case LONG -> Long.class;
             case DOUBLE -> Double.class;
         };
         if (constant == null || constant.getClass() != expected) {
-            throw new IllegalArgumentException(
-                    "expected " + expected.getSimpleName() + " constant for " + type);
+            String actualType = constant == null ? "null" : constant.getClass().getSimpleName();
+            throw new IllegalArgumentException("SELECT on \"" + tableName + "\": column \""
+                    + columnName + "\" is " + type + " but constant is " + actualType);
         }
     }
 
