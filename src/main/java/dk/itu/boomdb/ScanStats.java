@@ -1,7 +1,7 @@
 package dk.itu.boomdb;
 
 /**
- * Counts partition decisions made by the most recent scan.
+ * Counts partition decisions made for the most recently planned selection.
  *
  * @param partitionsTotal total partitions considered
  * @param partitionsRead partitions whose rows were read

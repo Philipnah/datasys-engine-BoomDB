@@ -2,10 +2,12 @@ package dk.itu.boomdb;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -13,23 +15,89 @@ import org.junit.jupiter.api.io.TempDir;
 
 class EngineIT {
     @Test
-    void printsTheFourRequiredSqlStatements() {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        PrintStream originalOutput = System.out;
-        try {
-            System.setOut(new PrintStream(output, true, StandardCharsets.UTF_8));
+    void noArgumentsPrintTeamAndUsageWithoutCreatingStorage(@TempDir Path directory) {
+        Path database = directory.resolve("database");
 
-            Engine.main(new String[0]);
-        } finally {
-            System.setOut(originalOutput);
-        }
+        RunResult result = run(new String[0], database);
 
+        assertEquals(0, result.status());
         assertEquals("""
+                Team BoomDB
+                Usage: boomdb '<SQL statement>' | boomdb -f <script.sql>
+                """, result.stdout());
+        assertEquals("", result.stderr());
+        assertFalse(Files.exists(database));
+    }
+
+    @Test
+    void oneArgumentExecutesOneStatement(@TempDir Path directory) {
+        Path database = directory.resolve("database");
+
+        RunResult result = run(
+                new String[] {"CREATE TABLE cities (city STRING);"}, database);
+
+        assertEquals(0, result.status());
+        assertEquals("", result.stdout());
+        assertEquals("", result.stderr());
+        assertEquals(List.of(new ColumnSpec("city", ColumnType.STRING)),
+                new StorageEngine(database).schema("cities"));
+    }
+
+    @Test
+    void scriptPrintsSelectRowsAsHeaderlessCsv(@TempDir Path directory) throws Exception {
+        Path csv = directory.resolve("trips.csv");
+        Files.copy(Path.of("src/test/resources/trips.csv"), csv);
+        Path script = directory.resolve("query.sql");
+        Files.writeString(script, """
                 CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
-                COPY trips FROM 'trips.csv';
+                COPY trips FROM '%s';
                 SELECT * FROM trips WHERE distance > 100;
+                """.formatted(csv));
+
+        RunResult result = run(
+                new String[] {"-f", script.toString()}, directory.resolve("database"));
+
+        assertEquals(0, result.status());
+        assertEquals("""
+                Aarhus,187,301.0
+                Copenhagen,140,210.0
+                Aalborg,210,340.5
+                Esbjerg,299,450.25
+                """, result.stdout());
+        assertEquals("", result.stderr());
+    }
+
+    @Test
+    void failingScriptWritesOnlyTheErrorToStderr(@TempDir Path directory) throws Exception {
+        Path csv = directory.resolve("trips.csv");
+        Files.copy(Path.of("src/test/resources/trips.csv"), csv);
+        Path script = directory.resolve("failing.sql");
+        Files.writeString(script, """
+                CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
+                COPY trips FROM '%s';
                 SELECT * FROM trips;
-                """, output.toString(StandardCharsets.UTF_8).replace("\r\n", "\n"));
+                SELECT * FROM missing;
+                """.formatted(csv));
+
+        RunResult result = run(
+                new String[] {"-f", script.toString()}, directory.resolve("database"));
+
+        assertEquals(1, result.status());
+        assertEquals("", result.stdout());
+        assertEquals("unknown table: missing\n", result.stderr());
+    }
+
+    @Test
+    void invalidArgumentsWriteUsageToStderrWithoutCreatingStorage(@TempDir Path directory) {
+        Path database = directory.resolve("database");
+
+        RunResult result = run(new String[] {"--bad", "value"}, database);
+
+        assertEquals(1, result.status());
+        assertEquals("", result.stdout());
+        assertEquals("Usage: boomdb '<SQL statement>' | boomdb -f <script.sql>\n",
+                result.stderr());
+        assertFalse(Files.exists(database));
     }
 
     @Test
@@ -63,4 +131,19 @@ class EngineIT {
         assertArrayEquals(new Object[] {"Copenhagen", 12L, 23.5}, cheapTrips.get(0));
         assertArrayEquals(new Object[] {"Roskilde", 31L, 45.0}, cheapTrips.get(1));
     }
+
+    private static RunResult run(String[] args, Path database) {
+        ByteArrayOutputStream stdout = new ByteArrayOutputStream();
+        ByteArrayOutputStream stderr = new ByteArrayOutputStream();
+        int status = Engine.run(args, database,
+                new PrintStream(stdout, true, StandardCharsets.UTF_8),
+                new PrintStream(stderr, true, StandardCharsets.UTF_8));
+        return new RunResult(status, normalize(stdout), normalize(stderr));
+    }
+
+    private static String normalize(ByteArrayOutputStream output) {
+        return output.toString(StandardCharsets.UTF_8).replace("\r\n", "\n");
+    }
+
+    private record RunResult(int status, String stdout, String stderr) { }
 }

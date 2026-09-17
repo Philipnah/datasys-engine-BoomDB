@@ -1,103 +1,85 @@
 package dk.itu.boomdb;
 
+import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Objects;
+import java.util.StringJoiner;
 import java.util.UUID;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
-
-/** Runs the Exercise 3 SQL parsing demonstration. */
+/** Runs BoomDB through its SQL command-line front door. */
 public final class Engine {
     private static final Logger LOGGER = LoggerFactory.getLogger(Engine.class);
+    private static final String USAGE =
+            "Usage: boomdb '<SQL statement>' | boomdb -f <script.sql>";
+
+    private Engine() { }
 
     /**
-     * Parses and prints the four required SQL statements without executing them.
+     * Runs one BoomDB session using {@code data/} below the working directory.
      *
-     * @param args ignored command-line arguments
+     * @param args no arguments, one SQL statement, or {@code -f <script.sql>}
      */
     public static void main(String[] args) {
-        // TODO: For AI: do not implement this yet, wait until explicitly told to do so
-        // Setup before program loop
-        // 1. startup logger
-        // 2. check if database exists
-        // 3. if not make new
-
-        // Program loop
-            // 1. wait for user input
-            // 2. receive SQL from user
-            // 3. Parse sql
-            // 4. do the operations
-            // 5. go back to waiting for user input
-
-            // User exits program and program ends
-
-
         MDC.put("sessionId", UUID.randomUUID().toString());
         MDC.put("statementNumber", "0");
         LOGGER.debug("engine started");
         try {
-            String sql = """
-                    CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
-                    COPY trips FROM 'trips.csv';
-                    SELECT * FROM trips WHERE distance > 100;
-                    SELECT * FROM trips;
-                    """;
-            SqlPrinter printer = new SqlPrinter();
-            for (Statement statement : new SqlParser().parse(sql)) {
-                System.out.println(printer.print(statement));
-            }
+            run(args, Path.of("data"), System.out, System.err);
         } finally {
+            MDC.put("statementNumber", "0");
             LOGGER.debug("engine stopped");
         }
     }
 
-    private static void printRows(String label, List<Object[]> rows) {
-        System.out.println("\n" + label + " (" + rows.size() + " rows)");
+    static int run(String[] args, Path dataDirectory, PrintStream out, PrintStream err) {
+        Objects.requireNonNull(args, "args");
+        Objects.requireNonNull(dataDirectory, "dataDirectory");
+        Objects.requireNonNull(out, "out");
+        Objects.requireNonNull(err, "err");
 
-        if (rows.isEmpty()) {
-            System.out.println("┌──────────┐\n│ (empty)  │\n└──────────┘");
-            return;
+        if (args.length == 0) {
+            out.println(teamName());
+            out.println(USAGE);
+            return 0;
         }
 
-        // Determine the maximum number of columns across all rows
-        int colCount = rows.stream().mapToInt(r -> r.length).max().orElse(0);
-
-        // Calculate maximum string width for each column
-        int[] colWidths = new int[colCount];
-        for (Object[] row : rows) {
-            for (int i = 0; i < row.length; i++) {
-                String val = row[i] == null ? "NULL" : row[i].toString();
-                colWidths[i] = Math.max(colWidths[i], val.length());
+        try {
+            String sql;
+            if (args.length == 1) {
+                sql = args[0];
+            } else if (args.length == 2 && args[0].equals("-f")) {
+                sql = Files.readString(Path.of(args[1]), StandardCharsets.UTF_8);
+            } else {
+                throw new IllegalArgumentException(USAGE);
             }
-        }
 
-        // Build separators
-        String topBorder = IntStream.range(0, colCount)
-                .mapToObj(i -> "─".repeat(colWidths[i] + 2))
-                .collect(Collectors.joining("┬", "┌", "┐"));
-
-        String bottomBorder = IntStream.range(0, colCount)
-                .mapToObj(i -> "─".repeat(colWidths[i] + 2))
-                .collect(Collectors.joining("┴", "└", "┘"));
-
-        // Print top frame
-        System.out.println(topBorder);
-
-        // Print data rows
-        for (Object[] row : rows) {
-            StringBuilder sb = new StringBuilder("│");
-            for (int i = 0; i < colCount; i++) {
-                String val = (i < row.length && row[i] != null) ? row[i].toString() : (i < row.length ? "NULL" : "");
-                sb.append(String.format(" %-" + colWidths[i] + "s │", val));
+            List<Object[]> rows = new Executor(new StorageEngine(dataDirectory)).execute(sql);
+            for (Object[] row : rows) {
+                out.println(csvRow(row));
             }
-            System.out.println(sb);
+            return 0;
+        } catch (IOException | RuntimeException error) {
+            err.println(error.getMessage());
+            return 1;
         }
+    }
 
-        // Print bottom frame
-        System.out.println(bottomBorder);
+    static String teamName() {
+        return "Team BoomDB";
+    }
+
+    private static String csvRow(Object[] row) {
+        StringJoiner csv = new StringJoiner(",");
+        for (Object value : row) {
+            csv.add(String.valueOf(value));
+        }
+        return csv.toString();
     }
 }
