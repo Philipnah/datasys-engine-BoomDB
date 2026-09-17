@@ -1,5 +1,6 @@
 package dk.itu.boomdb;
 
+import java.math.BigDecimal;
 import java.util.stream.Collectors;
 
 /** Renders BoomDB SQL statements in a normalized form. */
@@ -40,6 +41,15 @@ public final class SqlPrinter {
     }
 
     private static String literal(Object constant) {
+        if (constant instanceof Double value) {
+            String text = Double.toString(value);
+            if (!text.contains("E")) {
+                return text;
+            }
+
+            String plain = BigDecimal.valueOf(value).toPlainString();
+            return plain.contains(".") ? plain : plain + ".0";
+        }
         return constant instanceof String text ? "'" + text + "'" : constant.toString();
     }
 }
