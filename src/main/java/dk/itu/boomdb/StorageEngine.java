@@ -9,6 +9,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -180,51 +182,29 @@ public final class StorageEngine {
             Comparison comparison, Object constant) {
         long started = System.nanoTime();
         try {
-            TableCatalog table = requireTable(tableName);
-            int columnIndex = columnIndex(table, columnName);
-            ColumnSpec column = table.columns().get(columnIndex);
-            requireConstantType(column.type(), constant);
             if (comparison == null) {
                 throw new IllegalArgumentException("comparison is required");
             }
 
-            List<Object[]> result = new ArrayList<>();
-            int partitionsRead = 0;
-            int partitionsPruned = 0;
-            for (PartitionMetadata partition : table.partitions()) {
-                ColumnStatistics statistics = partition.statistics().get(columnIndex);
-                Object min = decodeStatistic(column.type(), statistics.min());
-                Object max = decodeStatistic(column.type(), statistics.max());
-                boolean prune = StorageSupport.shouldPrune(
-                        column.type(), comparison, constant, min, max);
-                LOGGER.debug("table={} column={} comparison={} const={} partition={} min={} max={} decision={}",
-                        clean(tableName), clean(columnName), comparison, clean(constant),
-                        partition.id(), clean(min), clean(max), prune ? "PRUNED" : "READ");
-                if (prune) {
-                    partitionsPruned++;
-                    continue;
-                }
+            SelectStatement statement = new SelectStatement(tableName, Optional.of(
+                    new Predicate(columnName, comparison, constant)));
+            new Binder(this).bind(statement);
+            Operator operator = new Planner(this).plan(statement);
 
-                partitionsRead++;
-                try {
-                    for (Object[] row : StorageSupport.readPartition(
-                            partitionPath(partition.fileName()), table.columns())) {
-                        if (StorageSupport.matches(
-                                column.type(), comparison, row[columnIndex], constant)) {
-                            result.add(row);
-                        }
-                    }
-                } catch (IOException error) {
-                    throw new UncheckedIOException(
-                            "cannot read partition " + partition.fileName(), error);
+            List<Object[]> result = new ArrayList<>();
+            operator.open();
+            try {
+                for (Object[] row; (row = operator.next()) != null; ) {
+                    result.add(row);
                 }
+            } finally {
+                operator.close();
             }
 
-            lastScanStats = new ScanStats(
-                    table.partitions().size(), partitionsRead, partitionsPruned);
             LOGGER.debug("table={} column={} comparison={} const={} partitionsRead={} partitionsPruned={} rowsOut={} durationMs={}",
                     clean(tableName), clean(columnName), comparison, clean(constant),
-                    partitionsRead, partitionsPruned, result.size(), elapsedMillis(started));
+                    lastScanStats.partitionsRead(), lastScanStats.partitionsPruned(),
+                    result.size(), elapsedMillis(started));
             return result;
         } catch (RuntimeException error) {
             logFailure("SELECT", tableName, started, error);
@@ -239,6 +219,10 @@ public final class StorageEngine {
      */
     public ScanStats lastScanStats() {
         return lastScanStats;
+    }
+
+    void recordScanStats(ScanStats scanStats) {
+        lastScanStats = Objects.requireNonNull(scanStats, "scanStats");
     }
 
     static void validateColumns(List<ColumnSpec> columns) {
@@ -262,15 +246,6 @@ public final class StorageEngine {
                 .orElseThrow(() -> new IllegalArgumentException("unknown table: " + tableName));
     }
 
-    private static int columnIndex(TableCatalog table, String columnName) {
-        for (int index = 0; index < table.columns().size(); index++) {
-            if (table.columns().get(index).name().equals(columnName)) {
-                return index;
-            }
-        }
-        throw new IllegalArgumentException("unknown column: " + columnName);
-    }
-
     static void requireConstantType(ColumnType type, Object constant) {
         Class<?> expected = switch (type) {
             case STRING -> String.class;
@@ -281,14 +256,6 @@ public final class StorageEngine {
             throw new IllegalArgumentException(
                     "expected " + expected.getSimpleName() + " constant for " + type);
         }
-    }
-
-    private static Object decodeStatistic(ColumnType type, String value) {
-        return switch (type) {
-            case STRING -> value;
-            case LONG -> Long.valueOf(value);
-            case DOUBLE -> Double.valueOf(value);
-        };
     }
 
     private static List<Object[]> readCsv(Path csv, List<ColumnSpec> columns) {
