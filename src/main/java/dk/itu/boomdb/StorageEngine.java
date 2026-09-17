@@ -18,7 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
-/** Stores typed tables in persistent PAX partitions and scans them with min/max pruning. */
+/** Stores typed tables in persistent PAX partitions and executes planned selections. */
 public final class StorageEngine {
     private static final Logger LOGGER = LoggerFactory.getLogger(StorageEngine.class);
     private static final int DEFAULT_MAX_ROWS_PER_PARTITION = 10_000;
@@ -213,7 +213,7 @@ public final class StorageEngine {
     }
 
     /**
-     * Returns statistics from the most recently completed select call.
+     * Returns planning statistics from the most recently completed select call.
      *
      * @return latest partition scan statistics
      */

@@ -24,6 +24,7 @@ public final class FilterOperator implements Operator {
      * @param predicate comparison to apply
      * @param columns child schema in row order
      * @throws IllegalArgumentException if the predicate column is unknown
+     * @throws NullPointerException if any argument is null
      */
     public FilterOperator(Operator child, Predicate predicate, List<ColumnSpec> columns) {
         this.child = Objects.requireNonNull(child, "child");

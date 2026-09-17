@@ -13,6 +13,7 @@ public final class Executor {
      * Creates an executor for one persistent database.
      *
      * @param storage database used for binding, planning, and execution
+     * @throws NullPointerException if {@code storage} is null
      */
     public Executor(StorageEngine storage) {
         this.storage = Objects.requireNonNull(storage, "storage");

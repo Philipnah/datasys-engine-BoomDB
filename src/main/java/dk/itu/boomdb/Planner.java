@@ -16,6 +16,7 @@ public final class Planner {
      * Creates a planner backed by one storage catalog.
      *
      * @param storage storage and catalog used by generated scans
+     * @throws NullPointerException if {@code storage} is null
      */
     public Planner(StorageEngine storage) {
         this.storage = Objects.requireNonNull(storage, "storage");
@@ -26,6 +27,8 @@ public final class Planner {
      *
      * @param statement select to plan
      * @return a bare scan or a filter over a pruned scan
+     * @throws IllegalArgumentException if a referenced table or column is unknown
+     * @throws NullPointerException if {@code statement} is null
      */
     public Operator plan(SelectStatement statement) {
         Objects.requireNonNull(statement, "statement");
