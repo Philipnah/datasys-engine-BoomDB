@@ -95,6 +95,20 @@ public final class StorageEngine {
         return List.copyOf(requireTable(tableName).columns());
     }
 
+    TableCatalog table(String tableName) {
+        return requireTable(tableName);
+    }
+
+    List<Object[]> readPartition(TableCatalog table, PartitionMetadata partition) {
+        try {
+            return StorageSupport.readPartition(
+                    partitionPath(partition.fileName()), table.columns());
+        } catch (IOException error) {
+            throw new UncheckedIOException(
+                    "cannot read partition " + partition.fileName(), error);
+        }
+    }
+
     /**
      * Loads one headerless CSV file into newly written table partitions.
      *
