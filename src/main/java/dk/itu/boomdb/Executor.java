@@ -27,16 +27,16 @@ public final class Executor {
      * @throws RuntimeException if parsing, binding, planning, or execution fails
      */
     public List<Object[]> execute(String sqlText) {
-        MDC.put("statementNumber", "0");
+        MDC.put("statementNumber", "1");
         try {
             List<Statement> statements = new SqlParser().parse(sqlText);
             Binder binder = new Binder(storage);
             Planner planner = new Planner(storage);
             List<Object[]> result = new ArrayList<>();
-            int statementNumber = 0;
+            int statementNumber = 1;
 
             for (Statement statement : statements) {
-                MDC.put("statementNumber", String.valueOf(++statementNumber));
+                MDC.put("statementNumber", String.valueOf(statementNumber++));
                 binder.bind(statement);
                 switch (statement) {
                     case CreateTableStatement create ->
@@ -48,7 +48,7 @@ public final class Executor {
             }
             return List.copyOf(result);
         } finally {
-            MDC.put("statementNumber", "0");
+            MDC.put("statementNumber", "1");
         }
     }
 

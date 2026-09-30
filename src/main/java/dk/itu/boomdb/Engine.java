@@ -45,7 +45,7 @@ public final class Engine {
         Objects.requireNonNull(err, "err");
 
         if (args.length == 0) {
-            out.println(teamName());
+            out.println("Team BoomDB");
             out.println(USAGE);
             return 0;
         }
@@ -69,10 +69,6 @@ public final class Engine {
             err.println(error.getMessage());
             return 1;
         }
-    }
-
-    static String teamName() {
-        return "Team BoomDB";
     }
 
     private static String csvRow(Object[] row) {
