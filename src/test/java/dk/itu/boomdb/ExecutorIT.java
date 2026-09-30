@@ -45,11 +45,11 @@ class ExecutorIT {
 
         assertEquals(List.of(new ColumnSpec("city", ColumnType.STRING)), storage.schema("first"));
         assertThrows(IllegalArgumentException.class, () -> storage.schema("never"));
-        assertEquals("0", MDC.get("statementNumber"));
+        assertEquals("1", MDC.get("statementNumber"));
     }
 
     @Test
-    void parseFailureRunsNoStatementsAndKeepsStatementNumberZero(@TempDir Path directory) {
+    void parseFailureRunsNoStatementsAndKeepsStatementNumberOne(@TempDir Path directory) {
         StorageEngine storage = new StorageEngine(directory);
         String malformed = """
                 CREATE TABLE before_error (city STRING);
@@ -60,7 +60,7 @@ class ExecutorIT {
                 () -> new Executor(storage).execute(malformed));
 
         assertThrows(IllegalArgumentException.class, () -> storage.schema("before_error"));
-        assertEquals("0", MDC.get("statementNumber"));
+        assertEquals("1", MDC.get("statementNumber"));
     }
 
     @Test
@@ -81,7 +81,7 @@ class ExecutorIT {
                 .skip(linesBeforeExecution)
                 .toList();
         assertTrue(lines.stream().anyMatch(line -> field(line, 5).equals("SqlParser")
-                && field(line, 2).equals("0")));
+                && field(line, 2).equals("1")));
         assertTrue(lines.stream().anyMatch(line -> line.contains("table=" + tableName + " columns=")
                 && field(line, 2).equals("1")));
         assertTrue(lines.stream().anyMatch(line -> line.contains("table=" + tableName + " file=")
@@ -91,7 +91,7 @@ class ExecutorIT {
                 && field(line, 2).equals("3")));
         assertTrue(lines.stream().anyMatch(line -> field(line, 5).equals("FilterOperator")
                 && field(line, 2).equals("3")));
-        assertEquals("0", MDC.get("statementNumber"));
+        assertEquals("1", MDC.get("statementNumber"));
     }
 
     private static String field(String line, int index) {
