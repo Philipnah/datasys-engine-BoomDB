@@ -9,6 +9,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.StringJoiner;
 import java.util.UUID;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -18,6 +19,7 @@ public final class Engine {
     private static final Logger LOGGER = LoggerFactory.getLogger(Engine.class);
     private static final String USAGE =
             "Usage: boomdb '<SQL statement>' | boomdb -f <script.sql>";
+    private static final String TEAMNAME = "Team BoomDB";
 
     private Engine() { }
 
@@ -45,7 +47,7 @@ public final class Engine {
         Objects.requireNonNull(err, "err");
 
         if (args.length == 0) {
-            out.println("Team BoomDB");
+            out.println(TEAMNAME);
             out.println(USAGE);
             return 0;
         }
