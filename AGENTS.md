@@ -53,8 +53,13 @@ client needs explicit setup should register that directory with the client.
   tests, build/configuration, or scripts. Also use it when a contributor
   explicitly asks to record a human-authored tracked code change. It does not
   apply to explanation-only conversations or tasks with no tracked code change.
+- Use [exercise-walkthrough](.agents/skills/exercise-walkthrough/SKILL.md) after
+  every agent-made project change, including documentation, to maintain one
+  roughly one-page Markdown review guide per exercise at
+  `docs/walkthroughs/exercise-N.md`. Update the same guide as work accumulates;
+  walkthrough-only and AI-log-only updates do not trigger another update.
 
-For covered work, create one entry in `docs/ai-usage/` after implementation
+For work covered by `ai-usage-log`, create one entry in `docs/ai-usage/` after implementation
 and validation, commit it with the change, and link it from the pull request.
 Follow `docs/ai-usage/README.md`; do not record secrets, private text, raw
 prompts, chain-of-thought, or raw tool output.
