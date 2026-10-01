@@ -36,7 +36,7 @@ public final class SqlParser {
 
             List<Statement> statements = List.copyOf(
                     new SqlAstBuilder().visitScript(parser.script()));
-            LOGGER.debug("statements={} durationMs={}", statements.size(), elapsedMillis(started));
+            LOGGER.debug("statements={} durationMs={} AST={}", statements.size(), elapsedMillis(started), statements.toString());
             return statements;
         } catch (SqlParseException error) {
             LOGGER.error("failed line={} col={} durationMs={}",
