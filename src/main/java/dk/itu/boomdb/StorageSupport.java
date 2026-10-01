@@ -80,6 +80,14 @@ final class StorageSupport {
         };
     }
 
+    static Object decodeStatistic(ColumnType type, String value) {
+        return switch (type) {
+            case STRING -> value;
+            case LONG -> Long.valueOf(value);
+            case DOUBLE -> Double.valueOf(value);
+        };
+    }
+
     static Object[] parseCsvLine(Path source, int lineNumber, String line,
             List<ColumnSpec> columns) {
         String[] fields = line.split(",", -1);
