@@ -188,6 +188,7 @@ public final class StorageEngine {
 
             SelectStatement statement = new SelectStatement(tableName, Optional.of(
                     new Predicate(columnName, comparison, constant)));
+            // Binding validates names and constant types before planning.
             new Binder(this).bind(statement);
             Operator operator = new Planner(this).plan(statement);
 
@@ -246,15 +247,26 @@ public final class StorageEngine {
                 .orElseThrow(() -> new IllegalArgumentException("unknown table: " + tableName));
     }
 
-    static void requireConstantType(ColumnType type, Object constant) {
+    /**
+     * Requires an exact predicate type and identifies its table and column on failure.
+     *
+     * @param tableName table being selected
+     * @param columnName predicate column
+     * @param type column's declared type
+     * @param constant predicate value to validate
+     * @throws IllegalArgumentException if the constant is null or has an inexact type
+     */
+    static void requireConstantType(
+            String tableName, String columnName, ColumnType type, Object constant) {
         Class<?> expected = switch (type) {
             case STRING -> String.class;
             case LONG -> Long.class;
             case DOUBLE -> Double.class;
         };
         if (constant == null || constant.getClass() != expected) {
-            throw new IllegalArgumentException(
-                    "expected " + expected.getSimpleName() + " constant for " + type);
+            String actualType = constant == null ? "null" : constant.getClass().getSimpleName();
+            throw new IllegalArgumentException("SELECT on \"" + tableName + "\": column \""
+                    + columnName + "\" is " + type + " but constant is " + actualType);
         }
     }
 
