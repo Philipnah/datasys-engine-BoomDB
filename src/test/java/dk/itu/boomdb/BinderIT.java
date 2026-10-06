@@ -71,7 +71,11 @@ class BinderIT {
         Statement statement = new SelectStatement("trips", Optional.of(
                 new Predicate("distance", Comparison.EQUALS, "x")));
 
-        assertThrows(IllegalArgumentException.class, () -> binder.bind(statement));
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class, () -> binder.bind(statement));
+
+        assertEquals("SELECT on \"trips\": column \"distance\" is LONG but constant is String",
+                error.getMessage());
     }
 
     @Test

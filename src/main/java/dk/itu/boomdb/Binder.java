@@ -46,6 +46,7 @@ public final class Binder {
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException(
                         "unknown column: " + predicate.columnName()));
-        StorageEngine.requireConstantType(column.type(), predicate.constant());
+        StorageEngine.requireConstantType(
+                select.tableName(), predicate.columnName(), column.type(), predicate.constant());
     }
 }
