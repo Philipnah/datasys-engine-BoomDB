@@ -8,9 +8,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.MDC;
 
 class ExecutorIT {
@@ -29,6 +32,46 @@ class ExecutorIT {
         assertArrayEquals(new Object[] {"Aarhus", 187L, 301.0}, rows.get(0));
         assertArrayEquals(new Object[] {"Odense", 95L, 120.75}, rows.get(1));
         assertArrayEquals(new Object[] {"Aarhus", 187L, 301.0}, rows.get(2));
+    }
+
+    @ParameterizedTest
+    @ValueSource(doubles = {1.0e20, 1.0e-4, -0.0})
+    void executesPrintedDoublePredicatesAfterRoundTrip(double constant, @TempDir Path directory)
+            throws Exception {
+        Path csv = directory.resolve("prices.csv");
+        Files.writeString(csv, "0.0\n" + constant + "\n");
+        // Separate partitions exercise pruning, including -0.0 versus +0.0.
+        StorageEngine storage = new StorageEngine(directory.resolve("database"), 1);
+        storage.createTable("prices", List.of(new ColumnSpec("price", ColumnType.DOUBLE)));
+        storage.copyFile("prices", csv.toString());
+        SelectStatement statement = new SelectStatement("prices", Optional.of(
+                new Predicate("price", Comparison.EQUALS, constant)));
+
+        List<Object[]> rows = new Executor(storage).execute(new SqlPrinter().print(statement));
+
+        assertEquals(1, rows.size());
+        assertArrayEquals(new Object[] {constant}, rows.getFirst());
+        assertEquals(new ScanStats(2, 1, 1), storage.lastScanStats());
+
+        List<Object[]> apiRows = storage.select("prices", "price", Comparison.EQUALS, constant);
+        assertEquals(1, apiRows.size());
+        assertArrayEquals(new Object[] {constant}, apiRows.getFirst());
+        assertEquals(new ScanStats(2, 1, 1), storage.lastScanStats());
+    }
+
+    @Test
+    void bothSelectEntryPointsKeepContextualTypeErrors(@TempDir Path directory) {
+        StorageEngine storage = new StorageEngine(directory);
+        storage.createTable("prices", List.of(new ColumnSpec("price", ColumnType.DOUBLE)));
+
+        IllegalArgumentException apiError = assertThrows(IllegalArgumentException.class,
+                () -> storage.select("prices", "price", Comparison.EQUALS, 1L));
+        IllegalArgumentException sqlError = assertThrows(IllegalArgumentException.class,
+                () -> new Executor(storage).execute("SELECT * FROM prices WHERE price = 1;"));
+
+        assertEquals("SELECT on \"prices\": column \"price\" is DOUBLE but constant is Long",
+                apiError.getMessage());
+        assertEquals(apiError.getMessage(), sqlError.getMessage());
     }
 
     @Test

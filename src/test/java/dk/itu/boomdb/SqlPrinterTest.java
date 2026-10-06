@@ -33,7 +33,13 @@ class SqlPrinterTest {
                 Arguments.of(new SelectStatement("trips", Optional.of(
                         new Predicate("distance", Comparison.GREATER_THAN, -1L)))),
                 Arguments.of(new SelectStatement("trips", Optional.of(
-                        new Predicate("price", Comparison.LESS_THAN, -1.5)))));
+                        new Predicate("price", Comparison.LESS_THAN, -1.5)))),
+                Arguments.of(new SelectStatement("trips", Optional.of(
+                        new Predicate("price", Comparison.GREATER_THAN, 1.0e20)))),
+                Arguments.of(new SelectStatement("trips", Optional.of(
+                        new Predicate("price", Comparison.LESS_THAN, 1.0e-4)))),
+                Arguments.of(new SelectStatement("trips", Optional.of(
+                        new Predicate("price", Comparison.EQUALS, -0.0)))));
     }
 
     @Test
