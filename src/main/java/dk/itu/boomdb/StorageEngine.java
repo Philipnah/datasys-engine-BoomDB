@@ -78,7 +78,7 @@ public final class StorageEngine {
             validateColumns(columns);
             catalogStore.save(new TableCatalog(tableName, List.copyOf(columns), false, List.of()));
             
-            LOGGER.debug("table={} columns={} durationMs={}", clean(tableName), columns.size(),
+            LOGGER.debug("Creating table={} columns={} durationMs={}", clean(tableName), columns.size(),
                     elapsedMillis(started));
         } catch (RuntimeException error) {
             logFailure("CREATE", tableName, started, error);
@@ -154,7 +154,7 @@ public final class StorageEngine {
 
             catalogStore.save(new TableCatalog(
                     table.tableName(), table.columns(), true, List.copyOf(partitions)));
-            LOGGER.debug("table={} file={} rows={} partitions={} durationMs={}",
+            LOGGER.debug("Copying CSV into table={} file={} rows={} partitions={} durationMs={}",
                     clean(tableName), clean(csv.getFileName()), rows.size(), partitions.size(),
                     elapsedMillis(logStarted));
         } catch (IOException error) {
@@ -286,21 +286,24 @@ public final class StorageEngine {
     }
 
     private static List<ColumnStatistics> statisticsFor(String tableName, int partitionId,
-            List<ColumnSpec> columns, List<Object[]> rows) {
+        List<ColumnSpec> columns, List<Object[]> rows) {
         List<ColumnStatistics> statistics = new ArrayList<>(columns.size());
+        
         for (int columnIndex = 0; columnIndex < columns.size(); columnIndex++) {
             ColumnSpec column = columns.get(columnIndex);
             List<Object> values = new ArrayList<>(rows.size());
             for (Object[] row : rows) {
                 values.add(row[columnIndex]);
             }
+
             MinMax minMax = StorageSupport.minMax(column.type(), values);
             statistics.add(new ColumnStatistics(column.name(),
                     String.valueOf(minMax.min()), String.valueOf(minMax.max())));
-            LOGGER.debug("table={} partition={} column={} min={} max={}",
+            LOGGER.debug("creating statistics for table={} partition={} column={} min={} max={}",
                     clean(tableName), partitionId, clean(column.name()),
                     clean(minMax.min()), clean(minMax.max()));
         }
+
         return List.copyOf(statistics);
     }
 
