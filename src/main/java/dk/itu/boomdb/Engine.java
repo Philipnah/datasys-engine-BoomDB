@@ -18,7 +18,7 @@ import org.slf4j.MDC;
 public final class Engine {
     private static final Logger LOGGER = LoggerFactory.getLogger(Engine.class);
     private static final String USAGE =
-            "Usage: boomdb '<SQL statement>' | boomdb -f <script.sql>";
+            "Usage: boomdb -c '<SQL statement>' | boomdb -f <script.sql>";
     private static final String TEAMNAME = "Team BoomDB";
 
     private Engine() { }
@@ -26,7 +26,7 @@ public final class Engine {
     /**
      * Runs one BoomDB session using {@code data/} below the working directory.
      *
-     * @param args no arguments, one SQL statement, or {@code -f <script.sql>}
+     * @param args no arguments, {@code -c <SQL statement>}, or {@code -f <script.sql>}
      */
     public static void main(String[] args) {
         MDC.put("sessionId", UUID.randomUUID().toString());
@@ -54,8 +54,9 @@ public final class Engine {
 
         try {
             String sql;
-            if (args.length == 1) {
-                sql = args[0];
+            // Command text must be explicitly selected so bare SQL is not accepted.
+            if (args.length == 2 && args[0].equals("-c")) {
+                sql = args[1];
             } else if (args.length == 2 && args[0].equals("-f")) {
                 sql = Files.readString(Path.of(args[1]), StandardCharsets.UTF_8);
             } else {
