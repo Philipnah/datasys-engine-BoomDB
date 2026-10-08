@@ -244,7 +244,10 @@ public final class StorageEngine {
 
     private TableCatalog requireTable(String tableName) {
         return catalogStore.load(tableName)
-                .orElseThrow(() -> new IllegalArgumentException("unknown table: " + tableName));
+                .orElseThrow(() -> {
+                    LOGGER.error("Unknown table: {}", tableName);
+                    return new IllegalArgumentException("unknown table: " + tableName);
+                });
     }
 
     /**
