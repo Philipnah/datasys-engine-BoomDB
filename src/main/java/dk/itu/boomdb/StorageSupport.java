@@ -1,8 +1,5 @@
 package dk.itu.boomdb;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -21,7 +18,6 @@ final class StorageSupport {
     private static final int FORMAT_VERSION = 1;
     private static final int FIXED_HEADER_BYTES = MAGIC.length + 3 * Integer.BYTES;
     private static final int COLUMN_DIRECTORY_BYTES = 2 * Long.BYTES;
-    private static final Logger LOGGER = LoggerFactory.getLogger(StorageSupport.class);
 
     private StorageSupport() { }
 
@@ -247,8 +243,6 @@ final class StorageSupport {
             case DOUBLE -> Double.class;
         };
         if (value == null || value.getClass() != expected) {
-            LOGGER.error("Expected {} for {} but received {}",
-                    expected.getSimpleName(), type, value != null ? value.getClass().getName() : null);
             throw new IllegalArgumentException(
                     "expected " + expected.getSimpleName() + " for " + type);
         }

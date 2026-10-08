@@ -243,11 +243,9 @@ public final class StorageEngine {
     }
 
     private TableCatalog requireTable(String tableName) {
+        // The enclosing operation owns failure logging, including SQL binding failures.
         return catalogStore.load(tableName)
-                .orElseThrow(() -> {
-                    LOGGER.error("Unknown table: {}", tableName);
-                    return new IllegalArgumentException("unknown table: " + tableName);
-                });
+                .orElseThrow(() -> new IllegalArgumentException("unknown table: " + tableName));
     }
 
     /**
