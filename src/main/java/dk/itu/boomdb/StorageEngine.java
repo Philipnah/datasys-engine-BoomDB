@@ -324,7 +324,7 @@ public final class StorageEngine {
 
     private static void logFailure(
             String operation, String tableName, long started, RuntimeException error) {
-        LOGGER.debug("table={} operation={} outcome=ERROR error={} durationMs={}",
+        LOGGER.error("table={} operation={} outcome=ERROR error={} durationMs={}",
                 clean(tableName), operation, clean(error.getMessage()), elapsedMillis(started));
     }
 
