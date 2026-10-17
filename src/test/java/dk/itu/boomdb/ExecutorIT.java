@@ -13,6 +13,7 @@ import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.MDC;
 
@@ -72,6 +73,47 @@ class ExecutorIT {
         assertEquals("SELECT on \"prices\": column \"price\" is DOUBLE but constant is Long",
                 apiError.getMessage());
         assertEquals(apiError.getMessage(), sqlError.getMessage());
+    }
+
+    @ParameterizedTest(name = "sql={0}, missingTable={1}")
+    @CsvSource({"true,true", "true,false", "false,true", "false,false"})
+    void selectValidationFailuresWriteExactlyOneContextualError(boolean sql,
+            boolean missingTable, @TempDir Path directory) throws Exception {
+        String tableName = "failure_" + UUID.randomUUID().toString().replace("-", "");
+        String laterTable = "later_" + tableName;
+        StorageEngine storage = new StorageEngine(directory);
+        if (!missingTable) {
+            storage.createTable(tableName, List.of(new ColumnSpec("price", ColumnType.DOUBLE)));
+        }
+        MDC.put("statementNumber", "7");
+        int linesBeforeExecution = Files.readAllLines(LOG_FILE).size();
+
+        IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> {
+            if (sql) {
+                new Executor(storage).execute("SELECT * FROM " + tableName
+                        + " WHERE price = 1; CREATE TABLE " + laterTable + " (price DOUBLE);");
+            } else {
+                storage.select(tableName, "price", Comparison.EQUALS, 1L);
+            }
+        });
+
+        String expectedMessage = missingTable ? "unknown table: " + tableName
+                : "SELECT on \"" + tableName + "\": column \"price\" is DOUBLE but constant is Long";
+        assertEquals(expectedMessage, error.getMessage());
+        // Count across classes so a helper-level error cannot hide a duplicate.
+        List<String> errors = Files.readAllLines(LOG_FILE).stream()
+                .skip(linesBeforeExecution)
+                .filter(line -> field(line, 4).equals("ERROR") && line.contains(tableName))
+                .toList();
+        assertEquals(1, errors.size());
+        String record = errors.getFirst();
+        assertEquals(7, record.split(",", -1).length);
+        assertEquals(sql ? "Executor" : "StorageEngine", field(record, 5));
+        assertEquals(sql ? "1" : "7", field(record, 2));
+        assertTrue(record.contains("table=" + tableName + " operation=SELECT outcome=ERROR"));
+        assertTrue(record.contains("error=" + expectedMessage));
+        assertTrue(new CatalogStore(directory).load(laterTable).isEmpty());
+        assertEquals(sql ? "1" : "7", MDC.get("statementNumber"));
     }
 
     @Test

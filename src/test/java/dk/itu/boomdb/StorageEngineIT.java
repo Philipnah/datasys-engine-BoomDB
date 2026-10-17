@@ -235,7 +235,7 @@ class StorageEngineIT {
     }
 
     @Test
-    void failedApiCallsStillWriteSevenFieldCsvLogLines(@TempDir Path directory)
+    void failedApiCallsWriteExactlyOneSevenFieldCsvErrorLogLine(@TempDir Path directory)
             throws Exception {
         String suffix = UUID.randomUUID().toString();
         StorageEngine engine = new StorageEngine(directory);
@@ -256,10 +256,15 @@ class StorageEngineIT {
 
     private static void assertCsvErrorLog(
             List<String> lines, String tableName, String operation) {
-        assertTrue(lines.stream()
-                .filter(line -> line.contains(
-                        "table=" + tableName + " operation=" + operation + " outcome=ERROR"))
-                .anyMatch(line -> line.split(",", -1).length == 7));
+        // Count all error records for this table, including helper-level duplicates.
+        List<String> errors = lines.stream()
+                .filter(line -> line.contains(",ERROR,StorageEngine,") && line.contains(tableName))
+                .toList();
+        assertEquals(1, errors.size(), "one error record per failed " + operation);
+        String error = errors.getFirst();
+        assertEquals(7, error.split(",", -1).length);
+        assertTrue(error.contains(
+                "table=" + tableName + " operation=" + operation + " outcome=ERROR"));
     }
 
     private static void assertRows(List<Object[]> actual, int... expectedRowIndexes) {
