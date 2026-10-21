@@ -243,6 +243,7 @@ public final class StorageEngine {
     }
 
     private TableCatalog requireTable(String tableName) {
+        // The enclosing operation owns failure logging, including SQL binding failures.
         return catalogStore.load(tableName)
                 .orElseThrow(() -> new IllegalArgumentException("unknown table: " + tableName));
     }
@@ -321,12 +322,14 @@ public final class StorageEngine {
 
     private static void logFailure(
             String operation, String tableName, long started, RuntimeException error) {
-        LOGGER.debug("table={} operation={} outcome=ERROR error={} durationMs={}",
+        LOGGER.error("table={} operation={} outcome=ERROR error={} durationMs={}",
                 clean(tableName), operation, clean(error.getMessage()), elapsedMillis(started));
     }
 
     private static String clean(Object value) {
-        return String.valueOf(value).replace(',', ';').replace('\n', ' ').replace('\r', ' ');
+        // Keep direct API failure records ingestible under the same rules as SQL failures.
+        return String.valueOf(value).replace(',', ';').replace('"', '\'')
+                .replace('\n', ' ').replace('\r', ' ');
     }
 
     private static void initializeLoggingContext() {

@@ -26,6 +26,7 @@ public final class Executor {
 
     /**
      * Parses and executes a complete SQL script, stopping at the first error.
+     * SELECT failures are logged once across binding, planning, and execution.
      *
      * @param sqlText semicolon-terminated SQL statements
      * @return immutable rows from all selects in statement order
@@ -78,8 +79,9 @@ public final class Executor {
                     stats.partitionsTotal(), stats.partitionsRead(), stats.partitionsPruned(),
                     String.format(Locale.ROOT, "%.6f", durationMs));
         } catch (RuntimeException error) {
+            // SQL SELECT bypasses StorageEngine.select, so this boundary owns its log.
             // Failed statements are diagnostics, never successful timing samples.
-            LOGGER.error("statement=SELECT table={} outcome=ERROR error={}",
+            LOGGER.error("table={} operation=SELECT outcome=ERROR error={}",
                     clean(select.tableName()), clean(error.getMessage()));
             throw error;
         }

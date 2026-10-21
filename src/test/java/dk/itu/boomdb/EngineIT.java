@@ -23,18 +23,18 @@ class EngineIT {
         assertEquals(0, result.status());
         assertEquals("""
                 Team BoomDB
-                Usage: boomdb '<SQL statement>' | boomdb -f <script.sql>
+                Usage: boomdb -c '<SQL statement>' | boomdb -f <script.sql>
                 """, result.stdout());
         assertEquals("", result.stderr());
         assertFalse(Files.exists(database));
     }
 
     @Test
-    void oneArgumentExecutesOneStatement(@TempDir Path directory) {
+    void commandFlagExecutesOneStatement(@TempDir Path directory) {
         Path database = directory.resolve("database");
 
         RunResult result = run(
-                new String[] {"CREATE TABLE cities (city STRING);"}, database);
+                new String[] {"-c", "CREATE TABLE cities (city STRING);"}, database);
 
         assertEquals(0, result.status());
         assertEquals("", result.stdout());
@@ -91,13 +91,21 @@ class EngineIT {
     void invalidArgumentsWriteUsageToStderrWithoutCreatingStorage(@TempDir Path directory) {
         Path database = directory.resolve("database");
 
-        RunResult result = run(new String[] {"--bad", "value"}, database);
+        // Reject invalid invocation shapes before SQL can create persistent storage.
+        for (String[] args : List.of(
+                new String[] {"CREATE TABLE cities (city STRING);"},
+                new String[] {"-c"},
+                new String[] {"-f"},
+                new String[] {"--bad", "value"},
+                new String[] {"-c", "CREATE TABLE cities (city STRING);", "extra"})) {
+            RunResult result = run(args, database);
 
-        assertEquals(1, result.status());
-        assertEquals("", result.stdout());
-        assertEquals("Usage: boomdb '<SQL statement>' | boomdb -f <script.sql>\n",
-                result.stderr());
-        assertFalse(Files.exists(database));
+            assertEquals(1, result.status());
+            assertEquals("", result.stdout());
+            assertEquals("Usage: boomdb -c '<SQL statement>' | boomdb -f <script.sql>\n",
+                    result.stderr());
+            assertFalse(Files.exists(database));
+        }
     }
 
     @Test

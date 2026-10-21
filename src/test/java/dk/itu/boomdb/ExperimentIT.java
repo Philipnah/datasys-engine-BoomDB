@@ -33,7 +33,7 @@ class ExperimentIT {
         try {
             System.setProperty(PROPERTY, value);
             ByteArrayOutputStream errors = new ByteArrayOutputStream();
-            assertEquals(1, Engine.run(new String[] {"CREATE TABLE t (id LONG);"},
+            assertEquals(1, Engine.run(new String[] {"-c", "CREATE TABLE t (id LONG);"},
                     directory.resolve("database"), new PrintStream(new ByteArrayOutputStream()),
                     new PrintStream(errors)));
             assertTrue(errors.toString().contains(PROPERTY));
@@ -85,7 +85,7 @@ class ExperimentIT {
     void launcherReturnsFailureAndClosesItsSession(@TempDir Path directory) throws Exception {
         Process process = new ProcessBuilder(Path.of(System.getProperty("java.home"), "bin/java").toString(),
                 "-cp", System.getProperty("java.class.path"), "dk.itu.boomdb.Engine",
-                "SELECT * FROM missing;")
+                "-c", "SELECT * FROM missing;")
                 .directory(directory.toFile()).redirectOutput(directory.resolve("stdout").toFile())
                 .redirectError(directory.resolve("stderr").toFile()).start();
         assertEquals(1, process.waitFor());
@@ -95,9 +95,12 @@ class ExperimentIT {
 
     private static void assertFailedSelect(String table) throws Exception {
         List<String> records = Files.readAllLines(Path.of("logs/engine.log")).stream()
-                .filter(line -> line.contains("statement=SELECT table=" + table)).toList();
+                // Include timing records too, so a failed SELECT cannot leave a success sample.
+                .filter(line -> line.contains(",Executor,") && line.contains("table=" + table + " "))
+                .toList();
         assertEquals(1, records.size());
         assertTrue(records.getFirst().contains(",ERROR,Executor,"));
+        assertTrue(records.getFirst().contains("operation=SELECT outcome=ERROR"));
         assertFalse(records.getFirst().contains("durationMs="));
     }
 
@@ -118,7 +121,7 @@ class ExperimentIT {
             else System.setProperty(PROPERTY, value);
             Path csv = directory.resolve("input.csv");
             Files.writeString(csv, "1\n".repeat(rows));
-            assertEquals(0, Engine.run(new String[] {"CREATE TABLE t (id LONG); COPY t FROM '"
+            assertEquals(0, Engine.run(new String[] {"-c", "CREATE TABLE t (id LONG); COPY t FROM '"
                     + csv + "';"}, directory.resolve("database"),
                     new PrintStream(new ByteArrayOutputStream()),
                     new PrintStream(new ByteArrayOutputStream())));
