@@ -32,11 +32,16 @@ public final class Engine {
         MDC.put("sessionId", UUID.randomUUID().toString());
         MDC.put("statementNumber", "0");
         LOGGER.debug("engine started");
+        int status;
         try {
-            run(args, Path.of("data"), System.out, System.err);
+            status = run(args, Path.of("data"), System.out, System.err);
         } finally {
             MDC.put("statementNumber", "0");
             LOGGER.debug("engine stopped");
+        }
+        if (status != 0) {
+            // The launcher must expose failed scripts to experiment automation.
+            System.exit(status);
         }
     }
 
@@ -62,7 +67,7 @@ public final class Engine {
                 throw new IllegalArgumentException(USAGE);
             }
 
-            List<Object[]> rows = new Executor(new StorageEngine(dataDirectory)).execute(sql);
+            List<Object[]> rows = new Executor(configuredStorage(dataDirectory)).execute(sql);
             for (Object[] row : rows) {
                 out.println(csvRow(row));
             }
@@ -71,6 +76,26 @@ public final class Engine {
             err.println(error.getMessage());
             return 1;
         }
+    }
+
+    /** Applies the optional CLI partition-size property before creating storage. 
+     * This was added to support the experiment. It just checks if a certain system property is set from the command line and if so, 
+     * it uses that value to configure the maximum number of rows per partition in the storage engine. If the property is not set, it uses the default configuration.
+    */
+    private static StorageEngine configuredStorage(Path dataDirectory) {
+        String value = System.getProperty("boomdb.maxRowsPerPartition");
+        if (value == null) {
+            return new StorageEngine(dataDirectory);
+        }
+        try {
+            int maximum = Integer.parseInt(value);
+            if (maximum > 0) {
+                return new StorageEngine(dataDirectory, maximum);
+            }
+        } catch (NumberFormatException error) {
+            // Malformed and nonpositive values share one actionable CLI error.
+        }
+        throw new IllegalArgumentException("boomdb.maxRowsPerPartition must be a positive integer");
     }
 
     private static String csvRow(Object[] row) {
