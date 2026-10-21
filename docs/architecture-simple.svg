@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="730" viewBox="0 0 1000 730" role="img" aria-labelledby="title description">
+  <title id="title">BoomDB — UML component diagram</title>
+  <desc id="description">The SQL front end uses query execution for SELECT and storage for CREATE, COPY, and schema lookup. Query execution uses storage for metadata and partition reads. Storage uses the catalog component. The catalog persists JSON metadata and storage persists PAX binary partitions. Dashed open arrows represent UML uses dependencies.</desc>
+  <style>
+    .background { fill: white; }
+    .component, .artifact, .glyph { fill: white; stroke: #263238; stroke-width: 1.6; }
+    .dependency { fill: none; stroke: #263238; stroke-width: 1.6; stroke-dasharray: 7 5; marker-end: url(#open-arrow); }
+    .arrow { fill: none; stroke: #263238; stroke-width: 1.4; }
+    text { font-family: Arial, Helvetica, sans-serif; fill: #182126; text-anchor: middle; }
+    .title { font-size: 25px; font-weight: 700; }
+    .stereotype { font-size: 14px; }
+    .name { font-size: 22px; font-weight: 700; }
+    .detail { font-size: 16px; }
+    .label { font-size: 15px; }
+    .footer { font-size: 14px; }
+  </style>
+  <defs>
+    <marker id="open-arrow" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="12" markerHeight="12" orient="auto" markerUnits="userSpaceOnUse">
+      <path class="arrow" d="M 1 1 L 11 6 L 1 11"/>
+    </marker>
+    <!-- UML component glyph: main rectangle with two protruding tabs. -->
+    <g id="component-glyph">
+      <rect class="glyph" x="7" y="0" width="22" height="27"/>
+      <rect class="glyph" x="0" y="5" width="12" height="6"/>
+      <rect class="glyph" x="0" y="17" width="12" height="6"/>
+    </g>
+  </defs>
+  <rect class="background" width="1000" height="730"/>
+  <text class="title" x="500" y="43">BoomDB — UML component diagram</text>
+
+  <!-- Responsibilities are grouped; these boxes do not imply separate processes. -->
+  <rect class="component" x="60" y="90" width="330" height="145"/>
+  <use href="#component-glyph" x="345" y="103"/>
+  <text class="stereotype" x="225" y="117">«component»</text>
+  <text class="name" x="225" y="148">SQL front end</text>
+  <text class="detail" x="225" y="180">Engine · Executor</text>
+  <text class="detail" x="225" y="205">SqlParser · SqlAstBuilder · Binder</text>
+
+  <rect class="component" x="610" y="90" width="330" height="145"/>
+  <use href="#component-glyph" x="895" y="103"/>
+  <text class="stereotype" x="775" y="117">«component»</text>
+  <text class="name" x="775" y="148">Query execution</text>
+  <text class="detail" x="775" y="180">Planner</text>
+  <text class="detail" x="775" y="205">ScanOperator · FilterOperator</text>
+
+  <rect class="component" x="60" y="370" width="330" height="130"/>
+  <use href="#component-glyph" x="345" y="383"/>
+  <text class="stereotype" x="225" y="397">«component»</text>
+  <text class="name" x="225" y="428">Catalog</text>
+  <text class="detail" x="225" y="458">CatalogStore</text>
+  <text class="detail" x="225" y="483">Schema · partitions · min/max</text>
+
+  <rect class="component" x="610" y="370" width="330" height="130"/>
+  <use href="#component-glyph" x="895" y="383"/>
+  <text class="stereotype" x="775" y="397">«component»</text>
+  <text class="name" x="775" y="428">Storage</text>
+  <text class="detail" x="775" y="465">StorageEngine · StorageSupport</text>
+
+  <path class="dependency" d="M 390 158 L 610 158"/>
+  <text class="label" x="500" y="126">plan and execute</text>
+  <text class="label" x="500" y="146">SELECT</text>
+
+  <path class="dependency" d="M 330 235 L 610 402"/>
+  <text class="label" x="407" y="306">CREATE / COPY</text>
+  <text class="label" x="407" y="326">schema lookup</text>
+
+  <path class="dependency" d="M 775 235 L 775 370"/>
+  <text class="label" x="853" y="290">metadata lookup</text>
+  <text class="label" x="853" y="313">partition reads</text>
+
+  <path class="dependency" d="M 610 450 L 390 450"/>
+  <text class="label" x="500" y="421">load / save</text>
+  <text class="label" x="500" y="441">metadata</text>
+
+  <!-- Folded-corner rectangles use the UML artifact convention for files. -->
+  <path class="artifact" d="M 60 575 H 366 L 390 599 V 650 H 60 Z M 366 575 V 599 H 390"/>
+  <text class="stereotype" x="225" y="600">«artifact»</text>
+  <text class="detail" x="225" y="632">catalogs/&lt;table&gt;.json</text>
+  <path class="artifact" d="M 610 575 H 916 L 940 599 V 650 H 610 Z M 916 575 V 599 H 940"/>
+  <text class="stereotype" x="775" y="596">«artifact»</text>
+  <text class="detail" x="775" y="620">data/&lt;table&gt;-&lt;partition&gt;.bin</text>
+  <text class="label" x="775" y="641">PAX binary partitions</text>
+
+  <path class="dependency" d="M 225 500 L 225 575"/>
+  <text class="label" x="293" y="543">read / write</text>
+  <path class="dependency" d="M 775 500 L 775 575"/>
+  <text class="label" x="843" y="543">read / write</text>
+
+  <text class="footer" x="500" y="689">Dashed open arrows = uses dependencies. All four components run in one Java process.</text>
+  <text class="footer" x="500" y="713">File paths are relative to the configured database root.</text>
+</svg>

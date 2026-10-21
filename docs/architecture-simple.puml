@@ -1,0 +1,50 @@
+@startuml
+title BoomDB — simplified UML component diagram
+skinparam componentStyle uml2
+skinparam shadowing false
+skinparam backgroundColor white
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam defaultFontColor #182126
+skinparam defaultTextAlignment center
+skinparam titleFontSize 25
+skinparam titleFontStyle bold
+skinparam stereotypeFontSize 14
+skinparam componentBackgroundColor white
+skinparam componentBorderColor #263238
+skinparam artifactBackgroundColor white
+skinparam artifactBorderColor #263238
+skinparam arrowColor #263238
+skinparam arrowFontSize 15
+skinparam arrowFontColor #182126
+skinparam nodesep 100
+skinparam ranksep 100
+top to bottom direction
+
+' Group existing classes by responsibility to keep the architecture readable.
+component "<size:22><b>SQL front end</b></size>\n\nEngine · Executor\nSqlParser · SqlAstBuilder · Binder" as Front <<component>>
+component "<size:22><b>Query execution</b></size>\n\nPlanner\nScanOperator · FilterOperator" as Query <<component>>
+component "<size:22><b>Storage</b></size>\n\nStorageEngine · StorageSupport" as Storage <<component>>
+component "<size:22><b>Catalog</b></size>\n\nCatalogStore\nSchema · partitions · min/max" as Catalog <<component>>
+artifact "catalogs/<table>.json" as CatalogFile <<artifact>>
+artifact "data/<table>-<partition>.bin\n<size:15>PAX binary partitions</size>" as Partitions <<artifact>>
+
+' UML dependencies point from the component using a service to its supplier.
+Front .right.> Query : plan and execute\nSELECT
+Front ..> Storage : CREATE / COPY\nschema lookup
+Query .down.> Storage : metadata lookup\npartition reads
+Storage .left.> Catalog : load / save\nmetadata
+Catalog .down.> CatalogFile : read / write
+Storage .down.> Partitions : read / write
+
+' Invisible constraints keep the SVG's two columns and three rows:
+' Front / Query, Catalog / Storage, then their respective file artifacts.
+Front -[hidden]down- Catalog
+CatalogFile -[hidden]right- Partitions
+
+skinparam footerFontSize 14
+center footer
+  Dashed open arrows = uses dependencies. All four components run in one Java process.
+  File paths are relative to the configured database root.
+endfooter
+@enduml

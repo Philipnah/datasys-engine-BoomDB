@@ -2,6 +2,7 @@ package dk.itu.boomdb;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -111,7 +112,9 @@ class ExecutorIT {
         assertEquals(sql ? "Executor" : "StorageEngine", field(record, 5));
         assertEquals(sql ? "1" : "7", field(record, 2));
         assertTrue(record.contains("table=" + tableName + " operation=SELECT outcome=ERROR"));
-        assertTrue(record.contains("error=" + expectedMessage));
+        // Log text is safe to ingest as CSV; the thrown exception retains its quotes.
+        assertTrue(record.contains("error=" + expectedMessage.replace('"', '\'')));
+        assertFalse(record.contains("\""));
         assertTrue(new CatalogStore(directory).load(laterTable).isEmpty());
         assertEquals(sql ? "1" : "7", MDC.get("statementNumber"));
     }

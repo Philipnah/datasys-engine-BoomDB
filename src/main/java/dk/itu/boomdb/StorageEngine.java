@@ -327,7 +327,9 @@ public final class StorageEngine {
     }
 
     private static String clean(Object value) {
-        return String.valueOf(value).replace(',', ';').replace('\n', ' ').replace('\r', ' ');
+        // Keep direct API failure records ingestible under the same rules as SQL failures.
+        return String.valueOf(value).replace(',', ';').replace('"', '\'')
+                .replace('\n', ' ').replace('\r', ' ');
     }
 
     private static void initializeLoggingContext() {
