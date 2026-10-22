@@ -10,9 +10,15 @@
 
 - **Versions and publication:** The counter belongs to each table. `CREATE TABLE`
   publishes version 0. A successful `COPY`, including an empty input, increments
-  it. Catalogs are named `catalogs/<table>-v<version>.json`; startup selects the
+  it. New catalogs are named `catalogs/versions/<table>-v<version>.json`; startup selects the
   highest numeric finalized version for that table and ignores temporary files.
-  Existing `<table>.json` catalogs remain readable as a migration baseline.
+  Existing flat `<table>.json` and `<table>-v<version>.json` catalogs remain
+  readable in place. Discovery checks each document's table identity and version
+  before admitting it, because a flat `t-v1.json` may be a legacy table named
+  `t-v1`. Valid foreign catalogs are ignored; malformed identities and duplicate
+  table/version documents are errors. Saves reject an existing logical version
+  across both layouts. Retention deletes the actual discovered file, so no copied
+  compatibility file can resurrect an expired version.
 - **Atomic commit:** Write and flush new partition files first, then write and
   flush a complete temporary catalog. Atomically rename the catalog to its final
   versioned name before publishing the immutable latest catalog in memory.

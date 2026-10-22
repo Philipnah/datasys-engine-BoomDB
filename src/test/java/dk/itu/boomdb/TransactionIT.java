@@ -111,7 +111,7 @@ class TransactionIT {
         try (var files = Files.list(directory.resolve("data"))) {
             assertEquals(1, files.count());
         }
-        try (var files = Files.list(directory.resolve("catalogs"))) {
+        try (var files = Files.list(directory.resolve("catalogs/versions"))) {
             assertEquals(2, files.count());
         }
     }
@@ -160,7 +160,7 @@ class TransactionIT {
         storage.copyFile("numbers", directory.resolve("rows.csv").toString());
         TableCatalog before = storage.table("numbers");
         // A final-name directory deterministically prevents publication after partition writes.
-        Files.createDirectory(directory.resolve("catalogs/numbers-v2.json"));
+        Files.createDirectory(directory.resolve("catalogs/versions/numbers-v2.json"));
         String sql = operation.equals("COPY")
                 ? "COPY numbers FROM '" + directory.resolve("rows.csv") + "';"
                 : "DELETE FROM numbers WHERE n = 1;";
@@ -197,9 +197,9 @@ class TransactionIT {
             }
             assertEquals(List.of(1L, 2L), rows);
             assertEquals(1, snapshot.table().version());
-            assertTrue(Files.exists(directory.resolve("catalogs/numbers-v1.json")));
+            assertTrue(Files.exists(directory.resolve("catalogs/versions/numbers-v1.json")));
         }
-        assertFalse(Files.exists(directory.resolve("catalogs/numbers-v1.json")));
+        assertFalse(Files.exists(directory.resolve("catalogs/versions/numbers-v1.json")));
         assertEquals(7, new StorageEngine(directory).table("numbers").version());
     }
 

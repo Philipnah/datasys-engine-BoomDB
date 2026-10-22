@@ -32,6 +32,7 @@ final class CatalogStore {
     private static final Map<Path, DirectoryState> DIRECTORIES = new ConcurrentHashMap<>();
 
     private final Path catalogDirectory;
+    private final Path versionDirectory;
     private final DirectoryState state;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -41,6 +42,9 @@ final class CatalogStore {
             Files.createDirectories(directory);
             // Real paths make leases shared even when two engines use different symlink aliases.
             catalogDirectory = directory.toRealPath();
+            // Versioned documents cannot share a namespace with legacy table-name files.
+            versionDirectory = catalogDirectory.resolve("versions");
+            Files.createDirectories(versionDirectory);
             state = DIRECTORIES.computeIfAbsent(catalogDirectory, unused -> new DirectoryState());
         } catch (IOException error) {
             throw new UncheckedIOException("cannot create catalog directory", error);
@@ -106,14 +110,15 @@ final class CatalogStore {
     void save(TableCatalog table) {
         synchronized (state) {
             catalogPath(table.tableName());
-            Path catalog = catalogPath(table.tableName() + "-v" + table.version());
+            Path catalog = versionDirectory.resolve(
+                    catalogPath(table.tableName() + "-v" + table.version()).getFileName());
             Path temporary = null;
             try {
                 // Never replace an immutable catalog, including one left by a previous engine.
-                if (Files.exists(catalog)) {
+                if (Files.exists(catalog) || catalogFiles(table.tableName()).containsKey(table.version())) {
                     throw new FileAlreadyExistsException(catalog.toString());
                 }
-                temporary = Files.createTempFile(catalogDirectory,
+                temporary = Files.createTempFile(versionDirectory,
                         table.tableName() + "-v" + table.version() + "-", ".tmp");
                 objectMapper.writerWithDefaultPrettyPrinter().writeValue(temporary.toFile(), table);
                 try (FileChannel channel = FileChannel.open(temporary, StandardOpenOption.WRITE)) {
@@ -144,39 +149,86 @@ final class CatalogStore {
     /** Discovers only complete filenames; numeric ordering avoids v10 sorting before v2. */
     private NavigableMap<Long, Path> catalogFiles(String tableName) throws IOException {
         Path legacy = catalogPath(tableName);
-        Pattern pattern = Pattern.compile(Pattern.quote(tableName) + "-v(0|[1-9][0-9]*)\\.json");
         NavigableMap<Long, Path> versions = new TreeMap<>(java.util.Comparator.reverseOrder());
-        try (var files = Files.list(catalogDirectory)) {
+        discoverVersions(tableName, versionDirectory, true, versions);
+        discoverVersions(tableName, catalogDirectory, false, versions);
+        if (Files.isRegularFile(legacy)) {
+            addCatalog(tableName, null, legacy, false, versions);
+        }
+        return versions;
+    }
+
+    private void discoverVersions(String tableName, Path directory, boolean strict,
+            NavigableMap<Long, Path> versions) throws IOException {
+        Pattern pattern = Pattern.compile(Pattern.quote(tableName) + "-v(0|[1-9][0-9]*)\\.json");
+        try (var files = Files.list(directory)) {
             for (Path path : files.filter(Files::isRegularFile).toList()) {
                 Matcher matcher = pattern.matcher(path.getFileName().toString());
                 if (matcher.matches()) {
                     try {
-                        versions.put(Long.parseLong(matcher.group(1)), path);
+                        addCatalog(tableName, Long.parseLong(matcher.group(1)), path, strict, versions);
                     } catch (NumberFormatException ignored) {
                         // Out-of-range names are not versions this engine can commit.
                     }
                 }
             }
         }
-        if (Files.isRegularFile(legacy)) {
-            TableCatalog baseline = readCatalog(tableName, null, legacy);
-            versions.putIfAbsent(baseline.version(), legacy);
+    }
+
+    /** Classifies ambiguous old filenames by their contents before lookup or retention. */
+    private void addCatalog(String tableName, Long expectedVersion, Path path, boolean strict,
+            NavigableMap<Long, Path> versions) throws IOException {
+        JsonNode json = objectMapper.readTree(path.toFile());
+        TableCatalog table = decodeCatalog(json, path);
+        String fileName = path.getFileName().toString();
+        boolean hasVersion = json.has("version");
+        boolean validFlatName = fileName.equals(table.tableName() + ".json")
+                || hasVersion && fileName.equals(table.tableName() + "-v" + table.version() + ".json");
+        if (!strict && !tableName.equals(table.tableName()) && validFlatName) {
+            // A flat t-v1.json can belong to table t-v1 or to version 1 of table t.
+            return;
         }
-        return versions;
+        if (!tableName.equals(table.tableName())
+                || expectedVersion != null && (!hasVersion || table.version() != expectedVersion)) {
+            throw new IOException("catalog identity does not match " + path);
+        }
+        Path previous = versions.putIfAbsent(table.version(), path);
+        if (previous != null) {
+            throw new IOException("duplicate catalog version " + table.version() + " for table "
+                    + tableName + ": " + previous + " and " + path);
+        }
     }
 
     private TableCatalog readCatalog(String tableName, Long expectedVersion, Path path)
             throws IOException {
         JsonNode json = objectMapper.readTree(path.toFile());
+        TableCatalog table = decodeCatalog(json, path);
+        if (!tableName.equals(table.tableName())
+                || expectedVersion != null && table.version() != expectedVersion) {
+            throw new IOException("catalog identity does not match " + path);
+        }
+        return table;
+    }
+
+    private TableCatalog decodeCatalog(JsonNode json, Path path) throws IOException {
+        if (json == null || !json.isObject()) {
+            throw new IOException("catalog is not a JSON object: " + path);
+        }
+        JsonNode identity = json.get("tableName");
+        if (identity == null || !identity.isTextual() || identity.textValue().isBlank()) {
+            throw new IOException("catalog has no valid table identity: " + path);
+        }
+        JsonNode version = json.get("version");
+        // Identity checks must use an exact integer, rather than Jackson's numeric coercions.
+        if (version != null && (!version.isIntegralNumber() || !version.canConvertToLong()
+                || version.longValue() < 0)) {
+            throw new IOException("catalog has no valid version: " + path);
+        }
         TableCatalog table = objectMapper.treeToValue(json, TableCatalog.class);
         if (!json.has("version")) {
             table = new TableCatalog(table.tableName(), table.columns(), table.copied(),
                     table.partitions(), table.copied() ? 1 : 0,
                     Files.getLastModifiedTime(path).toMillis());
-        }
-        if (!tableName.equals(table.tableName())
-                || expectedVersion != null && table.version() != expectedVersion) {
-            throw new IOException("catalog identity does not match " + path);
         }
         return table;
     }

@@ -104,9 +104,11 @@ class ExperimentTests(unittest.TestCase):
             root = Path(folder)
             catalogs = root / "data/catalogs"
             catalogs.mkdir(parents=True)
-            self.write_ingested_catalog(root, "experiment-v10.json")
+            self.write_ingested_catalog(root, "experiment-v10.json", version=10)
             # Older catalogs and unfinished publications must never mask version 10.
-            for name in ["experiment.json", "experiment-v9.json", "experiment-v11.json.tmp",
+            self.write_ingested_catalog(root, "experiment.json", version=1, copied=False)
+            self.write_ingested_catalog(root, "experiment-v9.json", version=9, copied=False)
+            for name in ["experiment-v11.json.tmp",
                          "experiment-vunknown.json", "other-v99.json"]:
                 (catalogs / name).write_text("{}")
 
@@ -115,21 +117,123 @@ class ExperimentTests(unittest.TestCase):
     def test_ingestion_accepts_legacy_catalog_when_no_version_is_published(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            self.write_ingested_catalog(root, "experiment.json")
+            self.write_ingested_catalog(root, "experiment.json", version=None)
             (root / "data/catalogs/experiment-v1.json.tmp").write_text("{}")
 
             self.assertEqual(self.runner.validate_ingestion(root, 2, 2), 1)
 
+    def test_ingestion_finds_latest_catalog_across_both_version_locations(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.write_ingested_catalog(root, "experiment-v9.json", version=9)
+            self.write_ingested_catalog(root, "versions/experiment-v10.json", version=10,
+                                        copied=False)
+            # The newer committed version must win even when ingestion validation fails.
+            with self.assertRaisesRegex(ValueError, "incorrect partition count"):
+                self.runner.validate_ingestion(root, 2, 2)
+
+    def test_ingestion_accepts_dedicated_versions_and_ignores_temporary_publications(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.write_ingested_catalog(root, "versions/experiment-v10.json", version=10)
+            catalogs = root / "data/catalogs"
+            (catalogs / "versions/experiment-v11.json.tmp").write_text("{")
+            (catalogs / "versions/other-v99.json").write_text("{")
+            # A valid colliding legacy name belongs to another table, regardless of version.
+            self.write_ingested_catalog(root, "experiment-v99.json",
+                                        table_name="experiment-v99", version=20, copied=False)
+
+            self.assertEqual(self.runner.validate_ingestion(root, 2, 2), 1)
+
+    def test_ingestion_ignores_a_valid_foreign_legacy_catalog_with_a_version_suffix(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.write_ingested_catalog(root, "experiment-v2.json", version=2)
+            self.write_ingested_catalog(root, "experiment-v99.json",
+                                        table_name="experiment-v99", version=None, copied=False)
+
+            self.assertEqual(self.runner.validate_ingestion(root, 2, 2), 1)
+
+    def test_ingestion_rejects_duplicate_own_versions_across_all_locations(self):
+        pairs = [("experiment.json", "experiment-v2.json"),
+                 ("experiment.json", "versions/experiment-v2.json"),
+                 ("experiment-v2.json", "versions/experiment-v2.json")]
+        for pair in pairs:
+            with self.subTest(paths=pair), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                for name in pair:
+                    self.write_ingested_catalog(root, name, version=2)
+
+                with self.assertRaisesRegex(ValueError, "[Dd]uplicate"):
+                    self.runner.validate_ingestion(root, 2, 2)
+
+    def test_ingestion_rejects_catalog_identity_mismatches(self):
+        cases = [("experiment-v2.json", "experiment", 3),
+                 ("experiment-v2.json", "other", 2),
+                 ("versions/experiment-v2.json", "experiment", 3),
+                 ("versions/experiment-v2.json", "experiment-v2", 2),
+                 ("experiment.json", "other", 1)]
+        for name, table_name, version in cases:
+            with self.subTest(path=name, table=table_name), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                self.write_ingested_catalog(root, "experiment-v10.json", version=10)
+                self.write_ingested_catalog(root, name, table_name=table_name, version=version)
+
+                with self.assertRaisesRegex(ValueError, "identity"):
+                    self.runner.validate_ingestion(root, 2, 2)
+
+    def test_ingestion_requires_explicit_version_for_versioned_catalogs(self):
+        for name in ["experiment-v1.json", "versions/experiment-v1.json"]:
+            with self.subTest(path=name), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                self.write_ingested_catalog(root, "experiment-v10.json", version=10)
+                self.write_ingested_catalog(root, name, version=None)
+
+                with self.assertRaisesRegex(ValueError, "identity"):
+                    self.runner.validate_ingestion(root, 2, 2)
+
+    def test_ingestion_does_not_hide_corrupt_older_catalogs(self):
+        for name in ["experiment.json", "experiment-v2.json", "versions/experiment-v2.json"]:
+            with self.subTest(path=name), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                self.write_ingested_catalog(root, "experiment-v10.json", version=10)
+                path = root / "data/catalogs" / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("{")
+
+                with self.assertRaises(json.JSONDecodeError):
+                    self.runner.validate_ingestion(root, 2, 2)
+
+    def test_ingestion_rejects_invalid_catalog_documents(self):
+        documents = [None, [], {},
+                     dict(tableName="experiment", version=-1),
+                     dict(tableName="experiment", version=True),
+                     dict(tableName="experiment", version="2"),
+                     dict(tableName="experiment", version=2 ** 63)]
+        for document in documents:
+            with self.subTest(document=document), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                self.write_ingested_catalog(root, "experiment-v10.json", version=10)
+                (root / "data/catalogs/experiment.json").write_text(json.dumps(document))
+
+                with self.assertRaises(ValueError):
+                    self.runner.validate_ingestion(root, 2, 2)
+
     @staticmethod
-    def write_ingested_catalog(root, name):
+    def write_ingested_catalog(root, name, table_name="experiment", version=1, copied=True):
         catalogs = root / "data/catalogs"
         data = root / "data/data"
         catalogs.mkdir(parents=True, exist_ok=True)
-        data.mkdir(parents=True)
+        data.mkdir(parents=True, exist_ok=True)
         (data / "experiment-0.bin").write_bytes(b"partition")
-        (catalogs / name).write_text(json.dumps(dict(copied=True, partitions=[dict(
+        path = catalogs / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        catalog = dict(tableName=table_name, copied=copied, partitions=[dict(
             id=0, fileName="experiment-0.bin", rowCount=2,
-            statistics=[dict(columnName="id", min=1, max=2)])])))
+            statistics=[dict(columnName="id", min=1, max=2)])])
+        if version is not None:
+            catalog["version"] = version
+        path.write_text(json.dumps(catalog))
 
     @staticmethod
     def record(number):
