@@ -10,15 +10,22 @@ public final class ScanOperator implements Operator {
     private final StorageEngine storage;
     private final TableCatalog table;
     private final List<PartitionMetadata> partitions;
+    private final CatalogStore.Snapshot snapshot;
 
     private int partitionIndex;
     private Iterator<Object[]> rows = Collections.emptyIterator();
 
     ScanOperator(StorageEngine storage, TableCatalog table,
             List<PartitionMetadata> partitions) {
+        this(storage, table, partitions, null);
+    }
+
+    ScanOperator(StorageEngine storage, TableCatalog table,
+            List<PartitionMetadata> partitions, CatalogStore.Snapshot snapshot) {
         this.storage = Objects.requireNonNull(storage, "storage");
         this.table = Objects.requireNonNull(table, "table");
         this.partitions = List.copyOf(partitions);
+        this.snapshot = snapshot;
     }
 
     @Override
@@ -41,6 +48,9 @@ public final class ScanOperator implements Operator {
     @Override
     public void close() {
         rows = Collections.emptyIterator();
+        if (snapshot != null) {
+            snapshot.close();
+        }
     }
 
     List<PartitionMetadata> partitions() {

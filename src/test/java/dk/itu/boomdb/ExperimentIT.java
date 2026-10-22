@@ -75,7 +75,8 @@ class ExperimentIT {
         String table = uniqueTable();
         StorageEngine storage = copiedTable(directory, table);
         // A missing file exercises failure after planning, while closing the filter.
-        Files.delete(directory.resolve("data/" + table + "-0.bin"));
+        Files.delete(directory.resolve("data").resolve(
+                storage.table(table).partitions().getFirst().fileName()));
         assertThrows(RuntimeException.class, () -> new Executor(storage)
                 .execute("SELECT * FROM " + table + " WHERE id = 2;"));
         assertFailedSelect(table);

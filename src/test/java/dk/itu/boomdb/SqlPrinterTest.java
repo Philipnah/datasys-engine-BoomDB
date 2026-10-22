@@ -27,6 +27,9 @@ class SqlPrinterTest {
                         new ColumnSpec("distance", ColumnType.LONG),
                         new ColumnSpec("price", ColumnType.DOUBLE)))),
                 Arguments.of(new CopyStatement("trips", "trips.csv")),
+                Arguments.of(new DeleteStatement("trips", Optional.empty())),
+                Arguments.of(new DeleteStatement("trips", Optional.of(
+                        new Predicate("distance", Comparison.GREATER_THAN, 100L)))),
                 Arguments.of(new SelectStatement("trips", Optional.empty())),
                 Arguments.of(new SelectStatement("trips", Optional.of(
                         new Predicate("city", Comparison.EQUALS, "Odense")))),
@@ -48,5 +51,25 @@ class SqlPrinterTest {
                 new Predicate("distance", Comparison.GREATER_THAN, 100L)));
 
         assertEquals("SELECT * FROM trips WHERE distance > 100;", printer.print(statement));
+    }
+
+    @ParameterizedTest
+    @MethodSource("deleteSql")
+    void normalizesDeleteAndPreservesItsAst(String sql, String normalized) {
+        Statement statement = parser.parse(sql).getFirst();
+
+        assertEquals(normalized, printer.print(statement));
+        assertEquals(List.of(statement), parser.parse(printer.print(statement)));
+    }
+
+    private static Stream<Arguments> deleteSql() {
+        return Stream.of(
+                Arguments.of("delete from trips;", "DELETE FROM trips;"),
+                Arguments.of("delete from trips where distance>100;",
+                        "DELETE FROM trips WHERE distance > 100;"),
+                Arguments.of("delete from trips where city='Odense';",
+                        "DELETE FROM trips WHERE city = 'Odense';"),
+                Arguments.of("delete from trips where price<1.5;",
+                        "DELETE FROM trips WHERE price < 1.5;"));
     }
 }

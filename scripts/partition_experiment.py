@@ -11,6 +11,7 @@ import math
 import os
 import platform
 import random
+import re
 import shutil
 import statistics
 import subprocess
@@ -247,7 +248,39 @@ def invoke_engine(work, phase, size):
 
 
 def validate_ingestion(work, rows, size):
-    catalog = json.loads((work / "data/catalogs/experiment.json").read_text())
+    catalogs = work / "data/catalogs"
+    # Only finalized versions count; a temporary publication is not committed.
+    versions = {}
+    for directory in [catalogs, catalogs / "versions"]:
+        for path in directory.glob("experiment*.json"):
+            match = re.fullmatch(r"experiment-v(0|[1-9][0-9]*)\.json", path.name)
+            legacy = directory == catalogs and path.name == "experiment.json"
+            if not path.is_file() or not (match or legacy):
+                continue
+            if match and int(match[1]) > 2 ** 63 - 1:
+                continue
+            candidate = json.loads(path.read_text())
+            if not isinstance(candidate, dict):
+                raise ValueError(f"Invalid catalog document in {path}")
+            table = candidate.get("tableName")
+            # Catalogs predating explicit versions use the engine's baseline version.
+            version = candidate.get("version", 1 if candidate.get("copied") else 0)
+            valid_identity = (isinstance(table, str) and type(version) is int and 0 <= version < 2 ** 63
+                              and (path.name == f"{table}.json" or "version" in candidate
+                                   and path.name == f"{table}-v{version}.json"))
+            if directory != catalogs:
+                valid_identity = valid_identity and table == "experiment" and version == int(match[1])
+            if not valid_identity:
+                raise ValueError(f"Catalog identity does not match {path}")
+            # A flat experiment-vN.json may instead be table experiment-vN's legacy catalog.
+            if table != "experiment":
+                continue
+            if version in versions:
+                raise ValueError(f"Duplicate catalog version {version} for experiment")
+            versions[version] = candidate
+    if not versions:
+        raise FileNotFoundError(catalogs / "experiment.json")
+    catalog = versions[max(versions)]
     partitions = catalog["partitions"]
     count = math.ceil(rows / size)
     if not catalog["copied"] or len(partitions) != count:
