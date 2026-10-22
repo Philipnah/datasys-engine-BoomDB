@@ -1,6 +1,7 @@
 package dk.itu.boomdb;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 /** Renders BoomDB SQL statements in a normalized form. */
@@ -12,24 +13,25 @@ public final class SqlPrinter {
      * @return normalized SQL text
      */
     public String print(Statement statement) {
-        if (statement instanceof CreateTableStatement create) {
-            String columns = create.columns().stream()
-                    .map(column -> column.name() + " " + column.type())
-                    .collect(Collectors.joining(", "));
-            return "CREATE TABLE " + create.tableName() + " (" + columns + ");";
-        }
-        if (statement instanceof CopyStatement copy) {
-            return "COPY " + copy.tableName() + " FROM '" + copy.csvFilePath() + "';";
-        }
+        return switch (statement) {
+            case CreateTableStatement create -> {
+                String columns = create.columns().stream()
+                        .map(column -> column.name() + " " + column.type())
+                        .collect(Collectors.joining(", "));
+                yield "CREATE TABLE " + create.tableName() + " (" + columns + ");";
+            }
+            case CopyStatement copy ->
+                    "COPY " + copy.tableName() + " FROM '" + copy.csvFilePath() + "';";
+            case SelectStatement select ->
+                    "SELECT * FROM " + select.tableName() + where(select.where()) + ";";
+            case DeleteStatement delete ->
+                    "DELETE FROM " + delete.tableName() + where(delete.where()) + ";";
+        };
+    }
 
-        SelectStatement select = (SelectStatement) statement;
-        String sql = "SELECT * FROM " + select.tableName();
-        if (select.where().isPresent()) {
-            Predicate predicate = select.where().orElseThrow();
-            sql += " WHERE " + predicate.columnName() + " "
-                    + symbol(predicate.comparison()) + " " + literal(predicate.constant());
-        }
-        return sql + ";";
+    private static String where(Optional<Predicate> where) {
+        return where.map(predicate -> " WHERE " + predicate.columnName() + " "
+                + symbol(predicate.comparison()) + " " + literal(predicate.constant())).orElse("");
     }
 
     private static String symbol(Comparison comparison) {

@@ -94,11 +94,12 @@ class StorageEngineIT {
                 new ColumnStatistics("distance", "12", "187"),
                 new ColumnStatistics("price", "23.5", "301.0")),
                 catalog.partitions().getFirst().statistics());
-        assertEquals(List.of("trips-0.bin", "trips-1.bin", "trips-2.bin", "trips-3.bin"),
-                catalog.partitions().stream().map(PartitionMetadata::fileName).toList());
+        assertEquals(4, catalog.partitions().stream().map(PartitionMetadata::fileName).distinct().count());
+        assertTrue(catalog.partitions().stream().allMatch(partition ->
+                partition.fileName().startsWith("trips-")));
         assertEquals(4, Files.list(directory.resolve("data")).count());
         List<Object[]> firstPartition = StorageSupport.readPartition(
-                directory.resolve("data/trips-0.bin"), TRIP_COLUMNS);
+                directory.resolve("data").resolve(catalog.partitions().getFirst().fileName()), TRIP_COLUMNS);
         assertArrayEquals(new Object[] {"Copenhagen", 12L, 23.5}, firstPartition.getFirst());
         assertArrayEquals(new Object[] {"Aarhus", 187L, 301.0}, firstPartition.getLast());
     }
@@ -112,12 +113,15 @@ class StorageEngineIT {
     }
 
     @Test
-    void secondCopyToTableIsRejected(@TempDir Path directory) {
+    void secondCopyAppendsPartitionsAndIncrementsVersion(@TempDir Path directory) {
         StorageEngine engine = createTripsTable(directory, 2);
         engine.copyFile("trips", TRIPS_CSV.toString());
 
-        assertThrows(UnsupportedOperationException.class,
-                () -> engine.copyFile("trips", TRIPS_CSV.toString()));
+        engine.copyFile("trips", TRIPS_CSV.toString());
+
+        assertEquals(2, engine.table("trips").version());
+        assertEquals(8, engine.table("trips").partitions().size());
+        assertEquals(16, new Executor(engine).execute("SELECT * FROM trips;").size());
     }
 
     @Test

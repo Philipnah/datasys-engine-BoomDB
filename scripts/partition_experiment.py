@@ -11,6 +11,7 @@ import math
 import os
 import platform
 import random
+import re
 import shutil
 import statistics
 import subprocess
@@ -247,7 +248,12 @@ def invoke_engine(work, phase, size):
 
 
 def validate_ingestion(work, rows, size):
-    catalog = json.loads((work / "data/catalogs/experiment.json").read_text())
+    catalogs = work / "data/catalogs"
+    # Only finalized versions count; a temporary publication is not committed.
+    versions = [(int(match[1]), path) for path in catalogs.glob("experiment-v*.json")
+                if path.is_file() and (match := re.fullmatch(r"experiment-v([0-9]+)\.json", path.name))]
+    path = max(versions, default=(0, catalogs / "experiment.json"))[1]
+    catalog = json.loads(path.read_text())
     partitions = catalog["partitions"]
     count = math.ceil(rows / size)
     if not catalog["copied"] or len(partitions) != count:

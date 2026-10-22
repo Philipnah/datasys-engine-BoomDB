@@ -10,6 +10,8 @@ import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class BinderIT {
     private static final List<ColumnSpec> TRIP_COLUMNS = List.of(
@@ -76,6 +78,67 @@ class BinderIT {
 
         assertEquals("SELECT on \"trips\": column \"distance\" is LONG but constant is String",
                 error.getMessage());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "DELETE FROM trips;",
+            "DELETE FROM trips WHERE city = 'Odense';",
+            "DELETE FROM trips WHERE distance > 100;",
+            "DELETE FROM trips WHERE price < 50.0;"
+    })
+    void validDeleteBindsWithoutExecution(String sql) {
+        Statement statement = new SqlParser().parse(sql).getFirst();
+
+        assertDoesNotThrow(() -> binder.bind(statement));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "DELETE FROM missing;",
+            "DELETE FROM trips WHERE missing = 1;",
+            "DELETE FROM trips WHERE distance = 'x';"
+    })
+    void deleteRejectsUnknownNamesAndMistypedConstants(String sql) {
+        Statement statement = new SqlParser().parse(sql).getFirst();
+
+        assertThrows(IllegalArgumentException.class, () -> binder.bind(statement));
+    }
+
+    @Test
+    void deleteTypeErrorIdentifiesItsOperation() {
+        Statement statement = new DeleteStatement("trips", Optional.of(
+                new Predicate("distance", Comparison.EQUALS, "x")));
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class, () -> binder.bind(statement));
+
+        assertEquals("DELETE on \"trips\": column \"distance\" is LONG but constant is String",
+                error.getMessage());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "SELECT * FROM snapshot_only WHERE distance > 100;",
+            "DELETE FROM snapshot_only WHERE distance > 100;",
+            "COPY snapshot_only FROM 'missing.csv';"
+    })
+    void callerPinnedBindingUsesOnlyTheSuppliedCatalog(String sql) {
+        // This binder's engine has no snapshot_only table: a metadata reload must fail.
+        StorageEngine source = new StorageEngine(directory.resolve("snapshot-source"));
+        source.createTable("snapshot_only", TRIP_COLUMNS);
+        TableCatalog table = source.table("snapshot_only");
+        Statement statement = new SqlParser().parse(sql).getFirst();
+
+        assertDoesNotThrow(() -> binder.bind(statement, table));
+    }
+
+    @Test
+    void callerPinnedBindingRejectsAnotherTablesCatalog() {
+        Statement statement = new DeleteStatement("missing", Optional.empty());
+
+        assertThrows(IllegalArgumentException.class,
+                () -> binder.bind(statement, engine.table("trips")));
     }
 
     @Test

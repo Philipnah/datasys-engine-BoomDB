@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Exposes the exercise's ./engine entry point through the established launcher.
+exec "$(dirname "$0")/engine.sh" "$@"

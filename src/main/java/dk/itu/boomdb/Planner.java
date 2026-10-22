@@ -32,7 +32,22 @@ public final class Planner {
      */
     public Operator plan(SelectStatement statement) {
         Objects.requireNonNull(statement, "statement");
-        TableCatalog table = storage.table(statement.tableName());
+        CatalogStore.Snapshot snapshot = storage.pin(statement.tableName());
+        try {
+            return plan(statement, snapshot.table(), snapshot);
+        } catch (RuntimeException error) {
+            snapshot.close();
+            throw error;
+        }
+    }
+
+    /** Plans using a catalog whose lifetime is owned by the enclosing statement. */
+    Operator plan(SelectStatement statement, TableCatalog table) {
+        return plan(statement, table, null);
+    }
+
+    private Operator plan(SelectStatement statement, TableCatalog table,
+            CatalogStore.Snapshot snapshot) {
         List<PartitionMetadata> allPartitions = List.copyOf(table.partitions());
 
         if (statement.where().isEmpty()) {
@@ -42,7 +57,7 @@ public final class Planner {
             }
             storage.recordScanStats(new ScanStats(
                     allPartitions.size(), allPartitions.size(), 0));
-            return new ScanOperator(storage, table, allPartitions);
+            return new ScanOperator(storage, table, allPartitions, snapshot);
         }
 
         Predicate predicate = statement.where().orElseThrow();
@@ -67,7 +82,7 @@ public final class Planner {
 
         storage.recordScanStats(new ScanStats(allPartitions.size(), surviving.size(),
                 allPartitions.size() - surviving.size()));
-        return new FilterOperator(new ScanOperator(storage, table, surviving),
+        return new FilterOperator(new ScanOperator(storage, table, surviving, snapshot),
                 predicate, table.columns());
     }
 

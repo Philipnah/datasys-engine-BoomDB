@@ -99,10 +99,42 @@ class ExperimentTests(unittest.TestCase):
             finally:
                 self.runner.REPOSITORY = original
 
+    def test_ingestion_uses_highest_numeric_finalized_catalog(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            catalogs = root / "data/catalogs"
+            catalogs.mkdir(parents=True)
+            self.write_ingested_catalog(root, "experiment-v10.json")
+            # Older catalogs and unfinished publications must never mask version 10.
+            for name in ["experiment.json", "experiment-v9.json", "experiment-v11.json.tmp",
+                         "experiment-vunknown.json", "other-v99.json"]:
+                (catalogs / name).write_text("{}")
+
+            self.assertEqual(self.runner.validate_ingestion(root, 2, 2), 1)
+
+    def test_ingestion_accepts_legacy_catalog_when_no_version_is_published(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            self.write_ingested_catalog(root, "experiment.json")
+            (root / "data/catalogs/experiment-v1.json.tmp").write_text("{}")
+
+            self.assertEqual(self.runner.validate_ingestion(root, 2, 2), 1)
+
+    @staticmethod
+    def write_ingested_catalog(root, name):
+        catalogs = root / "data/catalogs"
+        data = root / "data/data"
+        catalogs.mkdir(parents=True, exist_ok=True)
+        data.mkdir(parents=True)
+        (data / "experiment-0.bin").write_bytes(b"partition")
+        (catalogs / name).write_text(json.dumps(dict(copied=True, partitions=[dict(
+            id=0, fileName="experiment-0.bin", rowCount=2,
+            statistics=[dict(columnName="id", min=1, max=2)])])))
+
     @staticmethod
     def record(number):
         return (f"date,session,{number},1,DEBUG,Executor,statement=SELECT table=experiment "
-                "rowsOut=1 partitionsTotal=4 partitionsRead=1 partitionsPruned=3 durationMs=1.25\n")
+                "rowsOut=1 partitionsTotal=4 partitionsRead=1 partitionsPruned=3 version=3 durationMs=1.25\n")
 
 
 if __name__ == "__main__":

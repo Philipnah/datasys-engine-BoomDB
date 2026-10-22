@@ -3,6 +3,7 @@ package dk.itu.boomdb;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
@@ -65,6 +66,43 @@ class EngineIT {
                 Esbjerg,299,450.25
                 """, result.stdout());
         assertEquals("", result.stderr());
+    }
+
+    @Test
+    void packagedLauncherRunsRepeatedCopyAndDeleteScript(@TempDir Path directory) throws Exception {
+        Path launcher = Path.of("engine").toAbsolutePath();
+        assertTrue(Files.isExecutable(launcher), "./engine must be executable");
+        Path csv = directory.resolve("trips.csv");
+        Files.copy(Path.of("src/test/resources/trips.csv"), csv);
+        Path script = directory.resolve("mutations.sql");
+        Files.writeString(script, """
+                CREATE TABLE trips (city STRING, distance LONG, price DOUBLE);
+                COPY trips FROM '%s';
+                COPY trips FROM '%s';
+                DELETE FROM trips WHERE distance < 100;
+                SELECT * FROM trips;
+                """.formatted(csv, csv));
+        Path stdout = directory.resolve("stdout");
+        Path stderr = directory.resolve("stderr");
+
+        // Launch the shaded jar through the supported shell entry point in a clean database.
+        ProcessBuilder builder = new ProcessBuilder(launcher.toString(), "-f", script.toString())
+                .directory(directory.toFile()).redirectOutput(stdout.toFile())
+                .redirectError(stderr.toFile());
+        builder.environment().put("ENGINE_JAVA_OPTS", "-Dboomdb.maxRowsPerPartition=2");
+        Process process = builder.start();
+
+        assertEquals(0, process.waitFor(), Files.readString(stderr));
+        assertEquals("""
+                Aarhus,187,301.0
+                Copenhagen,140,210.0
+                Aalborg,210,340.5
+                Esbjerg,299,450.25
+                Aarhus,187,301.0
+                Copenhagen,140,210.0
+                Aalborg,210,340.5
+                Esbjerg,299,450.25
+                """, Files.readString(stdout).replace("\r\n", "\n"));
     }
 
     @Test

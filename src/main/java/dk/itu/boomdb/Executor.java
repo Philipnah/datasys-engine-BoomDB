@@ -49,12 +49,17 @@ public final class Executor {
                         storage.createTable(create.tableName(), create.columns());
                     }
                     case CopyStatement copy -> {
-                        binder.bind(copy);
-                        storage.copyFile(copy.tableName(), copy.csvFilePath());
+                        synchronized (storage) {
+                            executeCopy(copy, binder);
+                        }
+                    }
+                    case DeleteStatement delete -> {
+                        synchronized (storage) {
+                            executeDelete(delete, binder);
+                        }
                     }
                     case SelectStatement select ->
                         executeSelect(select, binder, planner, result);
-                    default -> throw new IllegalStateException("unsupported statement");
                 }
             }
             return List.copyOf(result);
@@ -63,20 +68,46 @@ public final class Executor {
         }
     }
 
+    private void executeCopy(CopyStatement copy, Binder binder) {
+        try (CatalogStore.Snapshot snapshot = storage.pin(copy.tableName())) {
+            binder.bind(copy, snapshot.table());
+            storage.copyFile(copy.tableName(), copy.csvFilePath(), snapshot.table());
+        } catch (RuntimeException error) {
+            logMutationFailure("COPY", copy.tableName(), error);
+            throw error;
+        }
+    }
+
+    private void executeDelete(DeleteStatement delete, Binder binder) {
+        try (CatalogStore.Snapshot snapshot = storage.pin(delete.tableName())) {
+            binder.bind(delete, snapshot.table());
+            storage.delete(delete.tableName(), delete.where(), snapshot.table());
+        } catch (RuntimeException error) {
+            logMutationFailure("DELETE", delete.tableName(), error);
+            throw error;
+        }
+    }
+
+    private static void logMutationFailure(String operation, String table, RuntimeException error) {
+        LOGGER.error("table={} operation={} outcome=ERROR error={}",
+                clean(table), operation, clean(error.getMessage()));
+    }
+
     /** Times binding through operator cleanup, excluding the summary log itself. */
     private void executeSelect(SelectStatement select, Binder binder, Planner planner,
             List<Object[]> destination) {
         int before = destination.size();
         long started = System.nanoTime();
-        try {
-            binder.bind(select);
-            drain(planner.plan(select), destination);
+        try (CatalogStore.Snapshot snapshot = storage.pin(select.tableName())) {
+            // Binding and planning share the catalog acquired at statement start.
+            binder.bind(select, snapshot.table());
+            drain(planner.plan(select, snapshot.table()), destination);
             // close() has finished, including its diagnostic logging.
             double durationMs = (System.nanoTime() - started) / 1_000_000.0;
             ScanStats stats = storage.lastScanStats();
-            LOGGER.debug("statement=SELECT table={} rowsOut={} partitionsTotal={} partitionsRead={} partitionsPruned={} durationMs={}",
+            LOGGER.debug("statement=SELECT table={} rowsOut={} partitionsTotal={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
                     clean(select.tableName()), destination.size() - before,
-                    stats.partitionsTotal(), stats.partitionsRead(), stats.partitionsPruned(),
+                    stats.partitionsTotal(), stats.partitionsRead(), stats.partitionsPruned(), snapshot.table().version(),
                     String.format(Locale.ROOT, "%.6f", durationMs));
         } catch (RuntimeException error) {
             // SQL SELECT bypasses StorageEngine.select, so this boundary owns its log.

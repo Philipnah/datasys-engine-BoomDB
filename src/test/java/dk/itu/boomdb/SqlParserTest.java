@@ -36,6 +36,24 @@ class SqlParserTest {
     }
 
     @ParameterizedTest
+    @MethodSource("deleteStatements")
+    void parsesDeleteWithAndWithoutWhere(String sql, DeleteStatement expected) {
+        assertEquals(List.of(expected), parser.parse(sql));
+    }
+
+    private static Stream<Arguments> deleteStatements() {
+        return Stream.of(
+                Arguments.of("DELETE FROM trips;",
+                        new DeleteStatement("trips", Optional.empty())),
+                Arguments.of("DELETE FROM trips WHERE distance > 100;",
+                        new DeleteStatement("trips", Optional.of(
+                                new Predicate("distance", Comparison.GREATER_THAN, 100L)))),
+                Arguments.of("delete from Trip_Data9 where city = 'Odense';",
+                        new DeleteStatement("Trip_Data9", Optional.of(
+                                new Predicate("city", Comparison.EQUALS, "Odense")))));
+    }
+
+    @ParameterizedTest
     @MethodSource("literalCases")
     void parsesLiteralsWithTheirExactJavaType(String literal, Object expected) {
         SelectStatement statement = (SelectStatement) parser.parse(
