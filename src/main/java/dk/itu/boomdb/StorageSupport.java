@@ -3,10 +3,12 @@ package dk.itu.boomdb;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import static java.nio.ByteOrder.LITTLE_ENDIAN;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -144,7 +146,15 @@ final class StorageSupport {
         ByteArrayOutputStream partition = new ByteArrayOutputStream(Math.toIntExact(offset));
         partition.writeBytes(header.array());
         chunks.forEach(partition::writeBytes);
-        Files.write(target, partition.toByteArray());
+        // CREATE_NEW protects every committed snapshot, even if a filename is reused by mistake.
+        try (FileChannel file = FileChannel.open(target,
+                StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+            ByteBuffer bytes = ByteBuffer.wrap(partition.toByteArray());
+            while (bytes.hasRemaining()) {
+                file.write(bytes);
+            }
+            file.force(true);
+        }
     }
 
     static List<Object[]> readPartition(Path source, List<ColumnSpec> columns)

@@ -94,11 +94,10 @@ class StorageEngineIT {
                 new ColumnStatistics("distance", "12", "187"),
                 new ColumnStatistics("price", "23.5", "301.0")),
                 catalog.partitions().getFirst().statistics());
-        assertEquals(List.of("trips-0.bin", "trips-1.bin", "trips-2.bin", "trips-3.bin"),
-                catalog.partitions().stream().map(PartitionMetadata::fileName).toList());
+        assertEquals(4, catalog.partitions().stream().map(PartitionMetadata::fileName).distinct().count());
         assertEquals(4, Files.list(directory.resolve("data")).count());
         List<Object[]> firstPartition = StorageSupport.readPartition(
-                directory.resolve("data/trips-0.bin"), TRIP_COLUMNS);
+                directory.resolve("data/" + catalog.partitions().getFirst().fileName()), TRIP_COLUMNS);
         assertArrayEquals(new Object[] {"Copenhagen", 12L, 23.5}, firstPartition.getFirst());
         assertArrayEquals(new Object[] {"Aarhus", 187L, 301.0}, firstPartition.getLast());
     }
@@ -112,12 +111,16 @@ class StorageEngineIT {
     }
 
     @Test
-    void secondCopyToTableIsRejected(@TempDir Path directory) {
+    void secondCopyAppendsPartitionsAndRows(@TempDir Path directory) {
         StorageEngine engine = createTripsTable(directory, 2);
         engine.copyFile("trips", TRIPS_CSV.toString());
 
-        assertThrows(UnsupportedOperationException.class,
-                () -> engine.copyFile("trips", TRIPS_CSV.toString()));
+        List<PartitionMetadata> first = engine.table("trips").partitions();
+        engine.copyFile("trips", TRIPS_CSV.toString());
+        assertEquals(first, engine.table("trips").partitions().subList(0, 4));
+        assertEquals(8, engine.table("trips").partitions().size());
+        assertRows(engine.select("trips", "distance", Comparison.GREATER_THAN, -1L),
+                0, 1, 2, 3, 4, 5, 6, 7, 0, 1, 2, 3, 4, 5, 6, 7);
     }
 
     @Test
@@ -132,7 +135,7 @@ class StorageEngineIT {
 
         assertTrue(error.getMessage().contains(csv.toString()));
         assertTrue(error.getMessage().contains("line 2"));
-        assertFalse(new CatalogStore(directory).load("trips").orElseThrow().copied());
+        assertEquals(0, new CatalogStore(directory).load("trips").orElseThrow().version());
         assertEquals(0, Files.list(directory.resolve("data")).count());
     }
 
@@ -148,7 +151,7 @@ class StorageEngineIT {
 
         assertTrue(error.getMessage().contains(csv.toString()));
         assertTrue(error.getMessage().contains("line 1"));
-        assertFalse(new CatalogStore(directory).load("trips").orElseThrow().copied());
+        assertEquals(0, new CatalogStore(directory).load("trips").orElseThrow().version());
         assertEquals(0, Files.list(directory.resolve("data")).count());
     }
 

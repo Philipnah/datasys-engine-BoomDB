@@ -32,7 +32,11 @@ public final class Planner {
      */
     public Operator plan(SelectStatement statement) {
         Objects.requireNonNull(statement, "statement");
-        TableCatalog table = storage.table(statement.tableName());
+        return plan(statement, storage.table(statement.tableName()));
+    }
+
+    /** Plans against the statement's pinned catalog without another metadata lookup. */
+    Operator plan(SelectStatement statement, TableCatalog table) {
         List<PartitionMetadata> allPartitions = List.copyOf(table.partitions());
 
         if (statement.where().isEmpty()) {
@@ -71,7 +75,7 @@ public final class Planner {
                 predicate, table.columns());
     }
 
-    private static int columnIndex(List<ColumnSpec> columns, String columnName) {
+    static int columnIndex(List<ColumnSpec> columns, String columnName) {
         for (int index = 0; index < columns.size(); index++) {
             if (columns.get(index).name().equals(columnName)) {
                 return index;

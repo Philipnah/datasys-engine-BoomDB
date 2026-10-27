@@ -4,6 +4,7 @@ import dk.itu.datasys.sql.SqlBaseVisitor;
 import dk.itu.datasys.sql.SqlParser.ColumnDefContext;
 import dk.itu.datasys.sql.SqlParser.CopyContext;
 import dk.itu.datasys.sql.SqlParser.CreateTableContext;
+import dk.itu.datasys.sql.SqlParser.DeleteContext;
 import dk.itu.datasys.sql.SqlParser.LiteralContext;
 import dk.itu.datasys.sql.SqlParser.PredicateContext;
 import dk.itu.datasys.sql.SqlParser.ScriptContext;
@@ -49,6 +50,14 @@ final class SqlAstBuilder extends SqlBaseVisitor<Object> {
                 ? Optional.empty()
                 : Optional.of((Predicate) visit(context.predicate()));
         return new SelectStatement(context.IDENTIFIER().getText(), predicate);
+    }
+
+    @Override
+    public DeleteStatement visitDelete(DeleteContext context) {
+        Optional<Predicate> predicate = context.predicate() == null
+                ? Optional.empty()
+                : Optional.of((Predicate) visit(context.predicate()));
+        return new DeleteStatement(context.IDENTIFIER().getText(), predicate);
     }
 
     @Override
