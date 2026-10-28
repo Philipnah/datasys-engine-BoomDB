@@ -68,22 +68,25 @@ public final class StorageEngine {
      * @param columns ordered table columns
      * @throws IllegalArgumentException if the table exists or the schema is invalid
      */
-    public void createTable(String tableName, List<ColumnSpec> columns) {
+    public synchronized void createTable(String tableName, List<ColumnSpec> columns) {
         long started = System.nanoTime();
         try {
-            if (catalogStore.load(tableName).isPresent()) {
-                throw new IllegalArgumentException("table already exists: " + tableName);
-            }
-
-            validateColumns(columns);
-            catalogStore.save(new TableCatalog(tableName, List.copyOf(columns), false, List.of()));
-            
-            LOGGER.debug("Creating table={} columns={} durationMs={}", clean(tableName), columns.size(),
-                    elapsedMillis(started));
+            create(new CreateTableStatement(tableName, columns));
         } catch (RuntimeException error) {
             logFailure("CREATE", tableName, started, error);
             throw error;
         }
+    }
+
+    void create(CreateTableStatement statement) {
+        long started = System.nanoTime();
+        if (catalogStore.load(statement.tableName()).isPresent()) {
+            throw new IllegalArgumentException("table already exists: " + statement.tableName());
+        }
+        validateColumns(statement.columns());
+        catalogStore.save(new TableCatalog(statement.tableName(), statement.columns(), 0, List.of()));
+        LOGGER.debug("statement=CREATE table={} columns={} version=0 durationMs={}",
+                clean(statement.tableName()), statement.columns().size(), elapsedMillis(started));
     }
 
     /**
@@ -112,60 +115,140 @@ public final class StorageEngine {
     }
 
     /**
-     * Loads one headerless CSV file into newly written table partitions.
+     * Appends a headerless CSV file as fresh immutable partitions and commits a new version.
      *
      * @param tableName destination table
      * @param csvFilePath path to the headerless ASCII CSV input
      * @throws IllegalArgumentException if the table or a CSV row is invalid
-     * @throws UnsupportedOperationException if the table has already been copied into
      */
-    public void copyFile(String tableName, String csvFilePath) {
-        long logStarted = System.nanoTime();
+    public synchronized void copyFile(String tableName, String csvFilePath) {
+        long started = System.nanoTime();
+        try (CatalogStore.Snapshot snapshot = snapshot(tableName)) {
+            copy(snapshot.table(), csvFilePath);
+        } catch (RuntimeException error) {
+            logFailure("COPY", tableName, started, error);
+            throw error;
+        }
+    }
+
+    void copy(TableCatalog table, String csvFilePath) {
+        long started = System.nanoTime();
+        Path csv = Path.of(csvFilePath);
+        List<Object[]> rows = readCsv(csv, table.columns());
+        List<PartitionMetadata> partitions = new ArrayList<>(table.partitions());
+        int partitionId = nextPartitionId(table);
         try {
-            TableCatalog table = requireTable(tableName);
-            if (table.copied()) {
-                throw new UnsupportedOperationException(
-                        "table already contains copied data: " + tableName);
-            }
-            Path csv = Path.of(csvFilePath);
-            List<Object[]> rows = readCsv(csv, table.columns());
-            List<PartitionMetadata> partitions = new ArrayList<>();
-            
             // the start variable is always the first row of the partition
             for (int start = 0; start < rows.size(); start += maxRowsPerPartition) {
                 // the end variable is always the last row of the partition
                 int end = Math.min(start + maxRowsPerPartition, rows.size());
-
                 List<Object[]> partitionRows = rows.subList(start, end);
-                int partitionId = partitions.size();
-                String fileName = tableName + "-" + partitionId + ".bin";
-                
-                // Compute statistics for each column in the partition
-                List<ColumnStatistics> statistics = statisticsFor(
-                        tableName, partitionId, table.columns(), partitionRows);
-
-                // Write the partition to disk
-                StorageSupport.writePartition(
-                        partitionPath(fileName), table.columns(), partitionRows);
-
-                partitions.add(new PartitionMetadata(
-                        partitionId, fileName, partitionRows.size(), statistics));
+                partitions.add(writePartition(table, partitionId++, partitionRows));
             }
-
-            catalogStore.save(new TableCatalog(
-                    table.tableName(), table.columns(), true, List.copyOf(partitions)));
-            LOGGER.debug("Copying CSV into table={} file={} rows={} partitions={} durationMs={}",
-                    clean(tableName), clean(csv.getFileName()), rows.size(), partitions.size(),
-                    elapsedMillis(logStarted));
+            long version = Math.incrementExact(table.version());
+            catalogStore.save(new TableCatalog(table.tableName(), table.columns(), version, partitions));
+            LOGGER.debug("statement=COPY table={} file={} rows={} partitions={} version={} durationMs={}",
+                    clean(table.tableName()), clean(csv.getFileName()), rows.size(),
+                    partitions.size() - table.partitions().size(), version, elapsedMillis(started));
         } catch (IOException error) {
-            UncheckedIOException unchecked =
-                    new UncheckedIOException("cannot write partitions for " + csvFilePath, error);
-            logFailure("COPY", tableName, logStarted, unchecked);
-            throw unchecked;
+            throw new UncheckedIOException("cannot write partitions for " + csvFilePath, error);
+        }
+    }
+
+    /**
+     * Removes matching rows by publishing a new catalog with copy-on-write partitions.
+     * A predicate that matches nothing leaves the table's version unchanged.
+     *
+     * @param tableName table to delete from
+     * @param where optional typed predicate; empty removes all rows
+     * @return number of rows deleted
+     * @throws IllegalArgumentException if a referenced name or constant type is invalid
+     */
+    public synchronized long delete(String tableName, Optional<Predicate> where) {
+        long started = System.nanoTime();
+        try (CatalogStore.Snapshot snapshot = snapshot(tableName)) {
+            DeleteStatement statement = new DeleteStatement(tableName, where);
+            new Binder(this).bind(statement, snapshot.table());
+            return delete(statement, snapshot.table());
         } catch (RuntimeException error) {
-            logFailure("COPY", tableName, logStarted, error);
+            logFailure("DELETE", tableName, started, error);
             throw error;
         }
+    }
+
+    long delete(DeleteStatement statement, TableCatalog table) {
+        long started = System.nanoTime();
+        Predicate predicate = statement.where().orElse(null);
+        int columnIndex = predicate == null ? -1 : Planner.columnIndex(table.columns(), predicate.columnName());
+        ColumnType type = predicate == null ? null : table.columns().get(columnIndex).type();
+        List<PartitionMetadata> partitions = new ArrayList<>();
+        int partitionId = nextPartitionId(table);
+        int rewritten = 0;
+        int carried = 0;
+        long deleted = 0;
+        try {
+            for (PartitionMetadata partition : table.partitions()) {
+                if (predicate != null) {
+                    ColumnStatistics statistics = partition.statistics().get(columnIndex);
+                    if (StorageSupport.shouldPrune(type, predicate.comparison(), predicate.constant(),
+                            StorageSupport.decodeStatistic(type, statistics.min()),
+                            StorageSupport.decodeStatistic(type, statistics.max()))) {
+                        partitions.add(partition);
+                        carried++;
+                        continue;
+                    }
+                }
+                List<Object[]> rows = readPartition(table, partition);
+                List<Object[]> survivors = new ArrayList<>();
+                for (Object[] row : rows) {
+                    if (predicate != null && !StorageSupport.matches(type, predicate.comparison(),
+                            row[columnIndex], predicate.constant())) {
+                        survivors.add(row);
+                    }
+                }
+                if (survivors.size() == rows.size()) {
+                    // Min/max can admit a false positive; keep its original file and offsets.
+                    partitions.add(partition);
+                    carried++;
+                    continue;
+                }
+                deleted += rows.size() - survivors.size();
+                rewritten++;
+                if (!survivors.isEmpty()) {
+                    partitions.add(writePartition(table, partitionId++, survivors));
+                }
+            }
+            long version = table.version();
+            if (deleted > 0) {
+                version = Math.incrementExact(version);
+                catalogStore.save(new TableCatalog(table.tableName(), table.columns(), version, partitions));
+            }
+            LOGGER.debug("statement=DELETE table={} rowsDeleted={} partitionsRewritten={} partitionsCarried={} version={} durationMs={}",
+                    clean(table.tableName()), deleted, rewritten, carried, version, elapsedMillis(started));
+            return deleted;
+        } catch (IOException error) {
+            throw new UncheckedIOException("cannot rewrite partitions for " + table.tableName(), error);
+        }
+    }
+
+    /** Writes a fresh partition and computes the same summaries for COPY and DELETE. */
+    private PartitionMetadata writePartition(TableCatalog table, int partitionId,
+            List<Object[]> partitionRows) throws IOException {
+        String fileName = table.tableName() + "-" + UUID.randomUUID() + ".bin";
+        // Compute statistics for each column in the partition
+        List<ColumnStatistics> statistics = statisticsFor(
+                table.tableName(), partitionId, table.columns(), partitionRows);
+        // Write the partition to disk
+        StorageSupport.writePartition(partitionPath(fileName), table.columns(), partitionRows);
+        return new PartitionMetadata(partitionId, fileName, partitionRows.size(), statistics);
+    }
+
+    private static int nextPartitionId(TableCatalog table) {
+        return Math.incrementExact(table.partitions().stream().mapToInt(PartitionMetadata::id).max().orElse(-1));
+    }
+
+    CatalogStore.Snapshot snapshot(String tableName) {
+        return catalogStore.acquire(tableName);
     }
 
     /**
@@ -178,10 +261,10 @@ public final class StorageEngine {
      * @return matching rows in schema column order
      * @throws IllegalArgumentException if a name or the constant type is invalid
      */
-    public List<Object[]> select(String tableName, String columnName,
+    public synchronized List<Object[]> select(String tableName, String columnName,
             Comparison comparison, Object constant) {
         long started = System.nanoTime();
-        try {
+        try (CatalogStore.Snapshot snapshot = snapshot(tableName)) {
             if (comparison == null) {
                 throw new IllegalArgumentException("comparison is required");
             }
@@ -189,8 +272,8 @@ public final class StorageEngine {
             SelectStatement statement = new SelectStatement(tableName, Optional.of(
                     new Predicate(columnName, comparison, constant)));
             // Binding validates names and constant types before planning.
-            new Binder(this).bind(statement);
-            Operator operator = new Planner(this).plan(statement);
+            new Binder(this).bind(statement, snapshot.table());
+            Operator operator = new Planner(this).plan(statement, snapshot.table());
 
             List<Object[]> result = new ArrayList<>();
             operator.open();
@@ -202,10 +285,10 @@ public final class StorageEngine {
                 operator.close();
             }
 
-            LOGGER.debug("table={} column={} comparison={} const={} partitionsRead={} partitionsPruned={} rowsOut={} durationMs={}",
+            LOGGER.debug("statement=SELECT table={} column={} comparison={} const={} partitionsRead={} partitionsPruned={} rowsOut={} version={} durationMs={}",
                     clean(tableName), clean(columnName), comparison, clean(constant),
                     lastScanStats.partitionsRead(), lastScanStats.partitionsPruned(),
-                    result.size(), elapsedMillis(started));
+                    result.size(), snapshot.table().version(), elapsedMillis(started));
             return result;
         } catch (RuntimeException error) {
             logFailure("SELECT", tableName, started, error);
@@ -251,13 +334,14 @@ public final class StorageEngine {
     /**
      * Requires an exact predicate type and identifies its table and column on failure.
      *
-     * @param tableName table being selected
+     * @param operation statement being validated
+     * @param tableName table being selected or deleted from
      * @param columnName predicate column
      * @param type column's declared type
      * @param constant predicate value to validate
      * @throws IllegalArgumentException if the constant is null or has an inexact type
      */
-    static void requireConstantType(
+    static void requireConstantType(String operation,
             String tableName, String columnName, ColumnType type, Object constant) {
         Class<?> expected = switch (type) {
             case STRING -> String.class;
@@ -266,7 +350,7 @@ public final class StorageEngine {
         };
         if (constant == null || constant.getClass() != expected) {
             String actualType = constant == null ? "null" : constant.getClass().getSimpleName();
-            throw new IllegalArgumentException("SELECT on \"" + tableName + "\": column \""
+            throw new IllegalArgumentException(operation + " on \"" + tableName + "\": column \""
                     + columnName + "\" is " + type + " but constant is " + actualType);
         }
     }

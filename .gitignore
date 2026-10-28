@@ -1,5 +1,4 @@
 target/
-__pycache__/
 logs/
 data/
 pom.xml.tag

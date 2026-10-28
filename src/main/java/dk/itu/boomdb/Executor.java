@@ -2,7 +2,6 @@ package dk.itu.boomdb;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 
 import org.slf4j.Logger;
@@ -43,47 +42,48 @@ public final class Executor {
 
             for (Statement statement : statements) {
                 MDC.put("statementNumber", String.valueOf(statementNumber++));
-                switch (statement) {
-                    case CreateTableStatement create -> {
-                        binder.bind(create);
-                        storage.createTable(create.tableName(), create.columns());
+                long started = System.nanoTime();
+                try {
+                    // ponytail: serialize statements per engine; finer locks need writer conflict validation.
+                    synchronized (storage) {
+                        try (CatalogStore.Snapshot snapshot = statement instanceof CreateTableStatement
+                                ? null : storage.snapshot(Binder.tableName(statement))) {
+                            TableCatalog table = snapshot == null ? null : snapshot.table();
+                            binder.bind(statement, table);
+                            switch (statement) {
+                                case CreateTableStatement create -> storage.create(create);
+                                case CopyStatement copy -> storage.copy(table, copy.csvFilePath());
+                                case DeleteStatement delete -> storage.delete(delete, table);
+                                case SelectStatement select -> {
+                                    int before = result.size();
+                                    drain(planner.plan(select, table), result);
+                                    // close() has finished, including its diagnostic logging.
+                                    ScanStats stats = storage.lastScanStats();
+                                    LOGGER.debug("statement=SELECT table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
+                                            clean(table.tableName()), result.size() - before,
+                                            stats.partitionsRead(), stats.partitionsPruned(), table.version(),
+                                            (System.nanoTime() - started) / 1_000_000);
+                                }
+                            }
+                        }
                     }
-                    case CopyStatement copy -> {
-                        binder.bind(copy);
-                        storage.copyFile(copy.tableName(), copy.csvFilePath());
-                    }
-                    case SelectStatement select ->
-                        executeSelect(select, binder, planner, result);
-                    default -> throw new IllegalStateException("unsupported statement");
+                } catch (RuntimeException error) {
+                    // SQL SELECT bypasses StorageEngine.select, so this boundary owns its log.
+                    // The same boundary owns SQL mutation failures; direct API calls log in storage.
+                    String operation = switch (statement) {
+                        case CreateTableStatement create -> "CREATE";
+                        case CopyStatement copy -> "COPY";
+                        case SelectStatement select -> "SELECT";
+                        case DeleteStatement delete -> "DELETE";
+                    };
+                    LOGGER.error("table={} operation={} outcome=ERROR error={}",
+                            clean(Binder.tableName(statement)), operation, clean(error.getMessage()));
+                    throw error;
                 }
             }
             return List.copyOf(result);
         } finally {
             MDC.put("statementNumber", "1");
-        }
-    }
-
-    /** Times binding through operator cleanup, excluding the summary log itself. */
-    private void executeSelect(SelectStatement select, Binder binder, Planner planner,
-            List<Object[]> destination) {
-        int before = destination.size();
-        long started = System.nanoTime();
-        try {
-            binder.bind(select);
-            drain(planner.plan(select), destination);
-            // close() has finished, including its diagnostic logging.
-            double durationMs = (System.nanoTime() - started) / 1_000_000.0;
-            ScanStats stats = storage.lastScanStats();
-            LOGGER.debug("statement=SELECT table={} rowsOut={} partitionsTotal={} partitionsRead={} partitionsPruned={} durationMs={}",
-                    clean(select.tableName()), destination.size() - before,
-                    stats.partitionsTotal(), stats.partitionsRead(), stats.partitionsPruned(),
-                    String.format(Locale.ROOT, "%.6f", durationMs));
-        } catch (RuntimeException error) {
-            // SQL SELECT bypasses StorageEngine.select, so this boundary owns its log.
-            // Failed statements are diagnostics, never successful timing samples.
-            LOGGER.error("table={} operation=SELECT outcome=ERROR error={}",
-                    clean(select.tableName()), clean(error.getMessage()));
-            throw error;
         }
     }
 
