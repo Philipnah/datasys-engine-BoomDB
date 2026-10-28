@@ -25,7 +25,8 @@ class LauncherIT {
                 """.formatted(csv, csv));
         Path stdout = directory.resolve("stdout");
         Path stderr = directory.resolve("stderr");
-        Process process = new ProcessBuilder(Path.of("engine").toAbsolutePath().toString(),
+        // Exercise the existing launcher directly, including from another working directory.
+        Process process = new ProcessBuilder(Path.of("engine.sh").toAbsolutePath().toString(),
                 "-f", script.toString()).directory(directory.toFile())
                 .redirectOutput(stdout.toFile()).redirectError(stderr.toFile()).start();
         assertTrue(process.waitFor(30, TimeUnit.SECONDS), "engine did not finish within 30 seconds");
