@@ -27,6 +27,8 @@ public final class StorageEngine {
     private final Path partitionDirectory;
     private final int maxRowsPerPartition;
     private ScanStats lastScanStats = new ScanStats(0, 0, 0);
+    // Test seam(шов) for interleaving a competing commit before a writer publishes.
+    volatile Runnable beforeCommit = () -> {};
 
     /**
      * Opens or creates persistent storage with partitions of at most 10,000 rows.
@@ -68,7 +70,7 @@ public final class StorageEngine {
      * @param columns ordered table columns
      * @throws IllegalArgumentException if the table exists or the schema is invalid
      */
-    public synchronized void createTable(String tableName, List<ColumnSpec> columns) {
+    public void createTable(String tableName, List<ColumnSpec> columns) {
         long started = System.nanoTime();
         try {
             create(new CreateTableStatement(tableName, columns));
@@ -120,8 +122,9 @@ public final class StorageEngine {
      * @param tableName destination table
      * @param csvFilePath path to the headerless ASCII CSV input
      * @throws IllegalArgumentException if the table or a CSV row is invalid
+     * @throws ConflictException if another writer commits after this statement starts
      */
-    public synchronized void copyFile(String tableName, String csvFilePath) {
+    public void copyFile(String tableName, String csvFilePath) {
         long started = System.nanoTime();
         try (CatalogStore.Snapshot snapshot = snapshot(tableName)) {
             copy(snapshot.table(), csvFilePath);
@@ -145,8 +148,8 @@ public final class StorageEngine {
                 List<Object[]> partitionRows = rows.subList(start, end);
                 partitions.add(writePartition(table, partitionId++, partitionRows));
             }
-            long version = Math.incrementExact(table.version());
-            catalogStore.save(new TableCatalog(table.tableName(), table.columns(), version, partitions));
+            beforeCommit.run(); // Added a before commit hook for tests.
+            long version = catalogStore.commit(table, partitions);
             LOGGER.debug("statement=COPY table={} file={} rows={} partitions={} version={} durationMs={}",
                     clean(table.tableName()), clean(csv.getFileName()), rows.size(),
                     partitions.size() - table.partitions().size(), version, elapsedMillis(started));
@@ -163,8 +166,9 @@ public final class StorageEngine {
      * @param where optional typed predicate; empty removes all rows
      * @return number of rows deleted
      * @throws IllegalArgumentException if a referenced name or constant type is invalid
+     * @throws ConflictException if another writer commits before this deletion is published
      */
-    public synchronized long delete(String tableName, Optional<Predicate> where) {
+    public long delete(String tableName, Optional<Predicate> where) {
         long started = System.nanoTime();
         try (CatalogStore.Snapshot snapshot = snapshot(tableName)) {
             DeleteStatement statement = new DeleteStatement(tableName, where);
@@ -220,8 +224,8 @@ public final class StorageEngine {
             }
             long version = table.version();
             if (deleted > 0) {
-                version = Math.incrementExact(version);
-                catalogStore.save(new TableCatalog(table.tableName(), table.columns(), version, partitions));
+                beforeCommit.run();
+                version = catalogStore.commit(table, partitions);
             }
             LOGGER.debug("statement=DELETE table={} rowsDeleted={} partitionsRewritten={} partitionsCarried={} version={} durationMs={}",
                     clean(table.tableName()), deleted, rewritten, carried, version, elapsedMillis(started));
@@ -261,7 +265,7 @@ public final class StorageEngine {
      * @return matching rows in schema column order
      * @throws IllegalArgumentException if a name or the constant type is invalid
      */
-    public synchronized List<Object[]> select(String tableName, String columnName,
+    public List<Object[]> select(String tableName, String columnName,
             Comparison comparison, Object constant) {
         long started = System.nanoTime();
         try (CatalogStore.Snapshot snapshot = snapshot(tableName)) {

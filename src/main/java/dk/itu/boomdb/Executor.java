@@ -44,26 +44,23 @@ public final class Executor {
                 MDC.put("statementNumber", String.valueOf(statementNumber++));
                 long started = System.nanoTime();
                 try {
-                    // ponytail: serialize statements per engine; finer locks need writer conflict validation.
-                    synchronized (storage) {
-                        try (CatalogStore.Snapshot snapshot = statement instanceof CreateTableStatement
-                                ? null : storage.snapshot(Binder.tableName(statement))) {
-                            TableCatalog table = snapshot == null ? null : snapshot.table();
-                            binder.bind(statement, table);
-                            switch (statement) {
-                                case CreateTableStatement create -> storage.create(create);
-                                case CopyStatement copy -> storage.copy(table, copy.csvFilePath());
-                                case DeleteStatement delete -> storage.delete(delete, table);
-                                case SelectStatement select -> {
-                                    int before = result.size();
-                                    drain(planner.plan(select, table), result);
-                                    // close() has finished, including its diagnostic logging.
-                                    ScanStats stats = storage.lastScanStats();
-                                    LOGGER.debug("statement=SELECT table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
-                                            clean(table.tableName()), result.size() - before,
-                                            stats.partitionsRead(), stats.partitionsPruned(), table.version(),
-                                            (System.nanoTime() - started) / 1_000_000);
-                                }
+                    try (CatalogStore.Snapshot snapshot = statement instanceof CreateTableStatement
+                            ? null : storage.snapshot(Binder.tableName(statement))) {
+                        TableCatalog table = snapshot == null ? null : snapshot.table();
+                        binder.bind(statement, table);
+                        switch (statement) {
+                            case CreateTableStatement create -> storage.create(create);
+                            case CopyStatement copy -> storage.copy(table, copy.csvFilePath());
+                            case DeleteStatement delete -> storage.delete(delete, table);
+                            case SelectStatement select -> {
+                                int before = result.size();
+                                drain(planner.plan(select, table), result);
+                                // close() has finished, including its diagnostic logging.
+                                ScanStats stats = storage.lastScanStats();
+                                LOGGER.debug("statement=SELECT table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
+                                        clean(table.tableName()), result.size() - before,
+                                        stats.partitionsRead(), stats.partitionsPruned(), table.version(),
+                                        (System.nanoTime() - started) / 1_000_000);
                             }
                         }
                     }

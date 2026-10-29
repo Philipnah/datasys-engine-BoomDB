@@ -72,6 +72,29 @@ final class CatalogStore {
         return new Snapshot(entry);
     }
 
+    /**
+     * Validates a writer's pinned base and publishes its next version as one operation.
+     * Partition preparation happens before acquiring this monitor; rejected files stay orphaned.
+     *
+     * @param base catalog pinned when the statement started
+     * @param partitions prepared partition list to publish
+     * @return newly committed version number
+     * @throws ConflictException if another writer committed after the base was pinned
+     */
+    synchronized long commit(TableCatalog base, List<PartitionMetadata> partitions) {
+        // ponytail: one store monitor serializes commits; per-table locks if throughput requires it.
+        TableCatalog current = load(base.tableName())
+                .orElseThrow(() -> new IllegalArgumentException("unknown table: " + base.tableName()));
+        if (base.version() != current.version()) {
+            // The SQL/API boundary logs this message once, like every other mutation failure.
+            throw new ConflictException("conflict table=" + base.tableName()
+                    + " base=" + base.version() + " current=" + current.version());
+        }
+        long version = Math.incrementExact(current.version());
+        save(new TableCatalog(base.tableName(), base.columns(), version, partitions));
+        return version;
+    }
+
     /** Flushes and atomically finalizes a new version before making it visible. */
     synchronized void save(TableCatalog table) {
         NavigableMap<Long, Version> versions = versions(table.tableName());
@@ -196,6 +219,7 @@ final class CatalogStore {
 
         @Override
         public void close() {
+            // Lease release and retention share the publication/snapshot monitor.
             synchronized (CatalogStore.this) {
                 if (!closed) {
                     closed = true;
