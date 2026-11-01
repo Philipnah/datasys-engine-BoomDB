@@ -11,6 +11,14 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.core.LogEvent;
+import org.apache.logging.log4j.core.LoggerContext;
+import org.apache.logging.log4j.core.appender.AbstractAppender;
+import org.apache.logging.log4j.core.config.Property;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -20,6 +28,64 @@ import org.slf4j.MDC;
 
 class ExecutorIT {
     private static final Path LOG_FILE = Path.of("logs/engine.log");
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void concurrentSelectsLogTheirOwnScanStatistics(boolean sql, @TempDir Path directory) throws Exception {
+        Path csv = directory.resolve("rows.csv");
+        Files.writeString(csv, "1\n2\n");
+        StorageEngine storage = new StorageEngine(directory.resolve("db"), 1);
+        storage.createTable("t", List.of(new ColumnSpec("id", ColumnType.LONG)));
+        storage.copyFile("t", csv.toString());
+        CountDownLatch parked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        LoggerContext context = (LoggerContext) LogManager.getContext(false);
+        var root = context.getConfiguration().getRootLogger();
+        // Observe real execution at filter close: planning is done, but the summary has not been logged.
+        var observer = new AbstractAppender("select-statistics-test", null, null, false, Property.EMPTY_ARRAY) {
+            @Override
+            public void append(LogEvent event) {
+                if (event.getThreadName().equals("select-statistics-worker")
+                        && event.getLoggerName().equals(FilterOperator.class.getName())) {
+                    parked.countDown();
+                    try {
+                        assertTrue(release.await(5, TimeUnit.SECONDS));
+                    } catch (InterruptedException error) {
+                        Thread.currentThread().interrupt();
+                        throw new AssertionError(error);
+                    }
+                }
+            }
+        };
+        observer.start();
+        root.addAppender(observer, null, null);
+        int logStart = Files.readAllLines(LOG_FILE).size();
+        try (var worker = Executors.newSingleThreadExecutor()) {
+            var first = worker.submit(() -> {
+                Thread.currentThread().setName("select-statistics-worker");
+                return sql ? new Executor(storage).execute("SELECT * FROM t WHERE id = 1;")
+                        : storage.select("t", "id", Comparison.EQUALS, 1L);
+            });
+            try {
+                assertTrue(parked.await(5, TimeUnit.SECONDS));
+                assertEquals(2, new Executor(storage).execute("SELECT * FROM t;").size());
+                assertEquals(new ScanStats(2, 2, 0), storage.lastScanStats());
+            } finally {
+                release.countDown();
+            }
+            assertArrayEquals(new Object[] {1L}, first.get(10, TimeUnit.SECONDS).getFirst());
+            List<String> summaries = Files.readAllLines(LOG_FILE).stream().skip(logStart)
+                    .filter(line -> line.contains("statement=SELECT table=t ")).toList();
+            assertEquals(2, summaries.size());
+            assertTrue(summaries.getFirst().contains("partitionsRead=2 partitionsPruned=0"));
+            assertTrue(summaries.getLast().contains("partitionsRead=1 partitionsPruned=1"));
+            assertEquals(new ScanStats(2, 1, 1),
+                    worker.submit(storage::lastScanStats).get(10, TimeUnit.SECONDS));
+        } finally {
+            root.removeAppender(observer.getName());
+            observer.stop();
+        }
+    }
 
     @Test
     void executesEveryStatementAndReturnsSelectRowsInScriptOrder(@TempDir Path directory)

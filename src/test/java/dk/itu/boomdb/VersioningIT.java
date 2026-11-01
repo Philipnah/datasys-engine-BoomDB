@@ -21,6 +21,31 @@ import org.junit.jupiter.params.provider.CsvSource;
 
 class VersioningIT {
     @Test
+    void openPlanReturnsPinnedRowsAfterDelete(@TempDir Path directory) throws IOException {
+        Path csv = directory.resolve("rows.csv");
+        Files.writeString(csv, "1\n2\n3\n");
+        StorageEngine storage = new StorageEngine(directory.resolve("db"), 2);
+        storage.createTable("t", List.of(new ColumnSpec("id", ColumnType.LONG)));
+        storage.copyFile("t", csv.toString());
+        try (CatalogStore.Snapshot snapshot = storage.snapshot("t")) {
+            Operator plan = new Planner(storage).plan(new SelectStatement("t", Optional.empty()), snapshot.table());
+            plan.open();
+            try {
+                assertEquals(2, storage.delete("t", Optional.of(new Predicate("id", Comparison.GREATER_THAN, 1L))));
+                List<Long> pinnedRows = new ArrayList<>();
+                for (Object[] row; (row = plan.next()) != null;) {
+                    pinnedRows.add((Long) row[0]);
+                }
+                // The rewrite and complete removal affect both original partitions, including the unread one.
+                assertEquals(List.of(1L, 2L, 3L), pinnedRows);
+            } finally {
+                plan.close();
+            }
+        }
+        assertVersionAndRows(storage, 2, 1L);
+    }
+
+    @Test
     void rebasesTheDeleteWhenACopyCommitsFirst(@TempDir Path directory) throws IOException {
         Path usersCsv = directory.resolve("users.csv");
         Path kasperCsv = directory.resolve("kasper.csv");

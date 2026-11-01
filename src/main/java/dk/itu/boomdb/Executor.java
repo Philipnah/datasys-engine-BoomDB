@@ -32,6 +32,7 @@ public final class Executor {
      * @throws RuntimeException if parsing, binding, planning, or execution fails
      */
     public List<Object[]> execute(String sqlText) {
+        storage.initializeLoggingContext();
         MDC.put("statementNumber", "1");
         try {
             List<Statement> statements = new SqlParser().parse(sqlText);
@@ -58,9 +59,11 @@ public final class Executor {
                             case DeleteStatement delete -> storage.delete(delete);
                             case SelectStatement select -> {
                                 int before = result.size();
-                                drain(planner.plan(select, table), result);
-                                // close() has finished, including its diagnostic logging.
+                                Operator plan = planner.plan(select, table);
+                                // Keep the statement's counts even if execution starts another selection.
                                 ScanStats stats = storage.lastScanStats();
+                                drain(plan, result);
+                                // close() has finished, including its diagnostic logging.
                                 LOGGER.debug("statement=SELECT table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
                                         clean(table.tableName()), result.size() - before,
                                         stats.partitionsRead(), stats.partitionsPruned(), table.version(),

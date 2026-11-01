@@ -27,7 +27,9 @@ public final class StorageEngine {
     private final CatalogStore catalogStore;
     private final Path partitionDirectory;
     private final int maxRowsPerPartition;
-    private ScanStats lastScanStats = new ScanStats(0, 0, 0);
+    private final String sessionId;
+    // Concurrent selections share storage, but each caller owns its latest planning statistics.
+    private final ThreadLocal<ScanStats> lastScanStats = ThreadLocal.withInitial(() -> new ScanStats(0, 0, 0));
     // Test seam(шов) for interleaving a competing commit before a writer publishes.
     volatile Runnable beforeCommit = () -> {};
 
@@ -52,6 +54,7 @@ public final class StorageEngine {
             throw new IllegalArgumentException("maxRowsPerPartition must be positive");
         }
         
+        sessionId = Optional.ofNullable(MDC.get("sessionId")).orElseGet(() -> UUID.randomUUID().toString());
         Path root = dataDirectory.toAbsolutePath().normalize();
         this.maxRowsPerPartition = maxRowsPerPartition;
         catalogStore = new CatalogStore(root);
@@ -72,6 +75,7 @@ public final class StorageEngine {
      * @throws IllegalArgumentException if the table exists or the schema is invalid
      */
     public void createTable(String tableName, List<ColumnSpec> columns) {
+        initializeLoggingContext();
         long started = System.nanoTime();
         try {
             create(new CreateTableStatement(tableName, columns));
@@ -126,6 +130,7 @@ public final class StorageEngine {
      * @throws IllegalArgumentException if the table or a CSV row is invalid
      */
     public void copyFile(String tableName, String csvFilePath) {
+        initializeLoggingContext();
         long started = System.nanoTime();
         try (CatalogStore.Snapshot snapshot = snapshot(tableName)) {
             copy(snapshot.table(), csvFilePath);
@@ -172,6 +177,7 @@ public final class StorageEngine {
      * @throws ConflictException if all four attempts conflict with overlapping partition changes
      */
     public long delete(String tableName, Optional<Predicate> where) {
+        initializeLoggingContext();
         long started = System.nanoTime();
         try {
             DeleteStatement statement = new DeleteStatement(tableName, where);
@@ -291,6 +297,7 @@ public final class StorageEngine {
      */
     public List<Object[]> select(String tableName, String columnName,
             Comparison comparison, Object constant) {
+        initializeLoggingContext();
         long started = System.nanoTime();
         try (CatalogStore.Snapshot snapshot = snapshot(tableName)) {
             if (comparison == null) {
@@ -302,6 +309,7 @@ public final class StorageEngine {
             // Binding validates names and constant types before planning.
             new Binder(this).bind(statement, snapshot.table());
             Operator operator = new Planner(this).plan(statement, snapshot.table());
+            ScanStats stats = lastScanStats();
 
             List<Object[]> result = new ArrayList<>();
             operator.open();
@@ -315,7 +323,7 @@ public final class StorageEngine {
 
             LOGGER.debug("statement=SELECT table={} column={} comparison={} const={} partitionsRead={} partitionsPruned={} rowsOut={} version={} durationMs={}",
                     clean(tableName), clean(columnName), comparison, clean(constant),
-                    lastScanStats.partitionsRead(), lastScanStats.partitionsPruned(),
+                    stats.partitionsRead(), stats.partitionsPruned(),
                     result.size(), snapshot.table().version(), elapsedMillis(started));
             return result;
         } catch (RuntimeException error) {
@@ -325,16 +333,16 @@ public final class StorageEngine {
     }
 
     /**
-     * Returns planning statistics from the most recently completed select call.
+     * Returns statistics for the most recently planned selection on the calling thread.
      *
-     * @return latest partition scan statistics
+     * @return latest partition scan statistics, or zero counts before this thread plans a selection
      */
     public ScanStats lastScanStats() {
-        return lastScanStats;
+        return lastScanStats.get();
     }
 
     void recordScanStats(ScanStats scanStats) {
-        lastScanStats = Objects.requireNonNull(scanStats, "scanStats");
+        lastScanStats.set(Objects.requireNonNull(scanStats, "scanStats"));
     }
 
     static void validateColumns(List<ColumnSpec> columns) {
@@ -444,9 +452,10 @@ public final class StorageEngine {
                 .replace('\n', ' ').replace('\r', ' ');
     }
 
-    private static void initializeLoggingContext() {
+    /** Fills missing worker context without replacing a caller's explicit session or statement. */
+    void initializeLoggingContext() {
         if (MDC.get("sessionId") == null) {
-            MDC.put("sessionId", UUID.randomUUID().toString());
+            MDC.put("sessionId", sessionId);
         }
         if (MDC.get("statementNumber") == null) {
             MDC.put("statementNumber", "0");
