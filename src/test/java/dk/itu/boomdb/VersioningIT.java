@@ -5,15 +5,72 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class VersioningIT {
+    @Test
+    void openPlanReturnsPinnedRowsAfterDelete(@TempDir Path directory) throws IOException {
+        Path csv = directory.resolve("rows.csv");
+        Files.writeString(csv, "1\n2\n3\n");
+        StorageEngine storage = new StorageEngine(directory.resolve("db"), 2);
+        storage.createTable("t", List.of(new ColumnSpec("id", ColumnType.LONG)));
+        storage.copyFile("t", csv.toString());
+        try (CatalogStore.Snapshot snapshot = storage.snapshot("t")) {
+            Operator plan = new Planner(storage).plan(new SelectStatement("t", Optional.empty()), snapshot.table());
+            plan.open();
+            try {
+                assertEquals(2, storage.delete("t", Optional.of(new Predicate("id", Comparison.GREATER_THAN, 1L))));
+                List<Long> pinnedRows = new ArrayList<>();
+                for (Object[] row; (row = plan.next()) != null;) {
+                    pinnedRows.add((Long) row[0]);
+                }
+                // The rewrite and complete removal affect both original partitions, including the unread one.
+                assertEquals(List.of(1L, 2L, 3L), pinnedRows);
+            } finally {
+                plan.close();
+            }
+        }
+        assertVersionAndRows(storage, 2, 1L);
+    }
+
+    @Test
+    void rebasesTheDeleteWhenACopyCommitsFirst(@TempDir Path directory) throws IOException {
+        Path usersCsv = directory.resolve("users.csv");
+        Path kasperCsv = directory.resolve("kasper.csv");
+        Files.writeString(usersCsv, "Zoi\nAlice\nBob\n");
+        Files.writeString(kasperCsv, "Kasper\n");
+        StorageEngine storage = new StorageEngine(directory.resolve("db"), 3);
+        Executor executor = new Executor(storage);
+        executor.execute("CREATE TABLE users (name STRING);");
+        executor.execute("COPY users FROM '" + usersCsv + "';");
+        assertEquals(1, storage.table("users").version());
+
+        // Pause DELETE after its rewrite so COPY publishes from the same base version first.
+        storage.beforeCommit = () -> {
+            storage.beforeCommit = () -> { }; // the COPY must not run this hook again
+            executor.execute("COPY users FROM '" + kasperCsv + "';"); // the winner commits version 2
+        };
+        executor.execute("DELETE FROM users WHERE name = 'Zoi';");
+        assertEquals(3, storage.table("users").version()); // the table is the winner's plus the rebased DELETE
+        executor.execute("DELETE FROM users WHERE name = 'Zoi';"); // the rerun is now a no-op on version 3
+        assertEquals(3, storage.table("users").version());
+        List<String> names = executor.execute("SELECT * FROM users;").stream()
+                .map(row -> (String) row[0]).sorted().toList();
+        assertEquals(List.of("Alice", "Bob", "Kasper"), names);
+    }
+
     @Test
     void createCopyCopyAndDeletePublishVersionsZeroThroughThree(@TempDir Path directory)
             throws Exception {

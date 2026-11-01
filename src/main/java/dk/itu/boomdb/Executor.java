@@ -32,6 +32,7 @@ public final class Executor {
      * @throws RuntimeException if parsing, binding, planning, or execution fails
      */
     public List<Object[]> execute(String sqlText) {
+        storage.initializeLoggingContext();
         MDC.put("statementNumber", "1");
         try {
             List<Statement> statements = new SqlParser().parse(sqlText);
@@ -44,26 +45,29 @@ public final class Executor {
                 MDC.put("statementNumber", String.valueOf(statementNumber++));
                 long started = System.nanoTime();
                 try {
-                    // ponytail: serialize statements per engine; finer locks need writer conflict validation.
-                    synchronized (storage) {
-                        try (CatalogStore.Snapshot snapshot = statement instanceof CreateTableStatement
-                                ? null : storage.snapshot(Binder.tableName(statement))) {
-                            TableCatalog table = snapshot == null ? null : snapshot.table();
+                    try (CatalogStore.Snapshot snapshot = statement instanceof CreateTableStatement
+                            || statement instanceof DeleteStatement
+                            ? null : storage.snapshot(Binder.tableName(statement))) {
+                        TableCatalog table = snapshot == null ? null : snapshot.table();
+                        // DELETE owns its snapshot so a retry releases and rebinds the failed base.
+                        if (!(statement instanceof DeleteStatement)) {
                             binder.bind(statement, table);
-                            switch (statement) {
-                                case CreateTableStatement create -> storage.create(create);
-                                case CopyStatement copy -> storage.copy(table, copy.csvFilePath());
-                                case DeleteStatement delete -> storage.delete(delete, table);
-                                case SelectStatement select -> {
-                                    int before = result.size();
-                                    drain(planner.plan(select, table), result);
-                                    // close() has finished, including its diagnostic logging.
-                                    ScanStats stats = storage.lastScanStats();
-                                    LOGGER.debug("statement=SELECT table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
-                                            clean(table.tableName()), result.size() - before,
-                                            stats.partitionsRead(), stats.partitionsPruned(), table.version(),
-                                            (System.nanoTime() - started) / 1_000_000);
-                                }
+                        }
+                        switch (statement) {
+                            case CreateTableStatement create -> storage.create(create);
+                            case CopyStatement copy -> storage.copy(table, copy.csvFilePath());
+                            case DeleteStatement delete -> storage.delete(delete);
+                            case SelectStatement select -> {
+                                int before = result.size();
+                                Operator plan = planner.plan(select, table);
+                                // Keep the statement's counts even if execution starts another selection.
+                                ScanStats stats = storage.lastScanStats();
+                                drain(plan, result);
+                                // close() has finished, including its diagnostic logging.
+                                LOGGER.debug("statement=SELECT table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
+                                        clean(table.tableName()), result.size() - before,
+                                        stats.partitionsRead(), stats.partitionsPruned(), table.version(),
+                                        (System.nanoTime() - started) / 1_000_000);
                             }
                         }
                     }

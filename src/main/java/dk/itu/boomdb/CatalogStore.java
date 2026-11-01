@@ -13,12 +13,15 @@ import java.nio.file.StandardOpenOption;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TreeMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -70,6 +73,63 @@ final class CatalogStore {
         }
         entry.readers++;
         return new Snapshot(entry);
+    }
+
+    /**
+     * Rebases disjoint partition changes and publishes the next version as one operation.
+     * Partition preparation happens before acquiring this monitor; rejected files stay orphaned.
+     *
+     * @param base catalog pinned when the statement started
+     * @param partitions prepared partition list to publish
+     * @return newly committed version number
+     * @throws ConflictException if another writer removed or rewrote an original this writer changes
+     */
+    synchronized long commit(TableCatalog base, List<PartitionMetadata> partitions) {
+        // ponytail: one store monitor serializes commits; per-table locks if throughput requires it.
+        TableCatalog current = load(base.tableName())
+                .orElseThrow(() -> new IllegalArgumentException("unknown table: " + base.tableName()));
+        if (base.version() != current.version()) {
+            Set<String> baseFiles = partitionFiles(base.partitions());
+            Set<String> removed = new HashSet<>(baseFiles);
+            removed.removeAll(partitionFiles(partitions));
+            if (!partitionFiles(current.partitions()).containsAll(removed)) {
+                LOGGER.warn("event=WRITE_CONFLICT table={} baseVersion={} currentVersion={}",
+                        base.tableName().replace(',', ';').replace('"', '\'')
+                                .replace('\n', ' ').replace('\r', ' '), base.version(), current.version());
+                // The SQL/API boundary logs this message once, like every other mutation failure.
+                // Recovered conflicts stop here; only an exhausted retry reaches that boundary.
+                throw new ConflictException("conflict table=" + base.tableName()
+                        + " base=" + base.version() + " current=" + current.version());
+            }
+            // Apply only this writer's delta: carrying its stale base would resurrect deleted files.
+            List<PartitionMetadata> merged = new ArrayList<>();
+            for (PartitionMetadata partition : current.partitions()) {
+                if (!removed.contains(partition.fileName())) {
+                    merged.add(partition);
+                }
+            }
+            int lastId = current.partitions().stream().mapToInt(PartitionMetadata::id).max().orElse(-1);
+            for (PartitionMetadata partition : partitions) {
+                if (!baseFiles.contains(partition.fileName())) {
+                    // Filenames identify immutable data; numeric IDs can collide between writers.
+                    lastId = Math.incrementExact(lastId);
+                    merged.add(new PartitionMetadata(lastId, partition.fileName(),
+                            partition.rowCount(), partition.statistics()));
+                }
+            }
+            partitions = merged;
+        }
+        long version = Math.incrementExact(current.version());
+        save(new TableCatalog(base.tableName(), base.columns(), version, partitions));
+        return version;
+    }
+
+    private static Set<String> partitionFiles(List<PartitionMetadata> partitions) {
+        Set<String> files = new HashSet<>();
+        for (PartitionMetadata partition : partitions) {
+            files.add(partition.fileName());
+        }
+        return files;
     }
 
     /** Flushes and atomically finalizes a new version before making it visible. */
@@ -196,6 +256,7 @@ final class CatalogStore {
 
         @Override
         public void close() {
+            // Lease release and retention share the publication/snapshot monitor.
             synchronized (CatalogStore.this) {
                 if (!closed) {
                     closed = true;

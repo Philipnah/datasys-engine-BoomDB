@@ -21,12 +21,17 @@ import org.slf4j.MDC;
 /** Stores typed tables in persistent PAX partitions and executes planned selections. */
 public final class StorageEngine {
     private static final Logger LOGGER = LoggerFactory.getLogger(StorageEngine.class);
-    private static final int DEFAULT_MAX_ROWS_PER_PARTITION = 10_000;
+    private static final int DEFAULT_MAX_ROWS_PER_PARTITION = 16_384;
+    private static final int MAX_DELETE_RETRIES = 3;
 
     private final CatalogStore catalogStore;
     private final Path partitionDirectory;
     private final int maxRowsPerPartition;
-    private ScanStats lastScanStats = new ScanStats(0, 0, 0);
+    private final String sessionId;
+    // Concurrent selections share storage, but each caller owns its latest planning statistics.
+    private final ThreadLocal<ScanStats> lastScanStats = ThreadLocal.withInitial(() -> new ScanStats(0, 0, 0));
+    // Test seam(шов) for interleaving a competing commit before a writer publishes.
+    volatile Runnable beforeCommit = () -> {};
 
     /**
      * Opens or creates persistent storage with partitions of at most 10,000 rows.
@@ -49,6 +54,7 @@ public final class StorageEngine {
             throw new IllegalArgumentException("maxRowsPerPartition must be positive");
         }
         
+        sessionId = Optional.ofNullable(MDC.get("sessionId")).orElseGet(() -> UUID.randomUUID().toString());
         Path root = dataDirectory.toAbsolutePath().normalize();
         this.maxRowsPerPartition = maxRowsPerPartition;
         catalogStore = new CatalogStore(root);
@@ -68,7 +74,8 @@ public final class StorageEngine {
      * @param columns ordered table columns
      * @throws IllegalArgumentException if the table exists or the schema is invalid
      */
-    public synchronized void createTable(String tableName, List<ColumnSpec> columns) {
+    public void createTable(String tableName, List<ColumnSpec> columns) {
+        initializeLoggingContext();
         long started = System.nanoTime();
         try {
             create(new CreateTableStatement(tableName, columns));
@@ -116,12 +123,14 @@ public final class StorageEngine {
 
     /**
      * Appends a headerless CSV file as fresh immutable partitions and commits a new version.
+     * Concurrent commits rebase these additions onto the latest catalog instead of causing a conflict.
      *
      * @param tableName destination table
      * @param csvFilePath path to the headerless ASCII CSV input
      * @throws IllegalArgumentException if the table or a CSV row is invalid
      */
-    public synchronized void copyFile(String tableName, String csvFilePath) {
+    public void copyFile(String tableName, String csvFilePath) {
+        initializeLoggingContext();
         long started = System.nanoTime();
         try (CatalogStore.Snapshot snapshot = snapshot(tableName)) {
             copy(snapshot.table(), csvFilePath);
@@ -145,8 +154,8 @@ public final class StorageEngine {
                 List<Object[]> partitionRows = rows.subList(start, end);
                 partitions.add(writePartition(table, partitionId++, partitionRows));
             }
-            long version = Math.incrementExact(table.version());
-            catalogStore.save(new TableCatalog(table.tableName(), table.columns(), version, partitions));
+            beforeCommit.run(); // Added a before commit hook for tests.
+            long version = catalogStore.commit(table, partitions);
             LOGGER.debug("statement=COPY table={} file={} rows={} partitions={} version={} durationMs={}",
                     clean(table.tableName()), clean(csv.getFileName()), rows.size(),
                     partitions.size() - table.partitions().size(), version, elapsedMillis(started));
@@ -158,21 +167,46 @@ public final class StorageEngine {
     /**
      * Removes matching rows by publishing a new catalog with copy-on-write partitions.
      * A predicate that matches nothing leaves the table's version unchanged.
+     * Overlapping partition changes are retried up to three times from fresh snapshots;
+     * each retry evaluates the latest rows, including any intervening inserts.
      *
      * @param tableName table to delete from
      * @param where optional typed predicate; empty removes all rows
      * @return number of rows deleted
      * @throws IllegalArgumentException if a referenced name or constant type is invalid
+     * @throws ConflictException if all four attempts conflict with overlapping partition changes
      */
-    public synchronized long delete(String tableName, Optional<Predicate> where) {
+    public long delete(String tableName, Optional<Predicate> where) {
+        initializeLoggingContext();
         long started = System.nanoTime();
-        try (CatalogStore.Snapshot snapshot = snapshot(tableName)) {
+        try {
             DeleteStatement statement = new DeleteStatement(tableName, where);
-            new Binder(this).bind(statement, snapshot.table());
-            return delete(statement, snapshot.table());
+            return delete(statement);
         } catch (RuntimeException error) {
             logFailure("DELETE", tableName, started, error);
             throw error;
+        }
+    }
+
+    /**
+     * Executes one logical DELETE, rebinding a fresh snapshot after each partition conflict.
+     * SQL and direct API calls share this retry budget; their outer boundaries log final failures.
+     */
+    long delete(DeleteStatement statement) {
+        for (int retries = 0; ; retries++) {
+            try (CatalogStore.Snapshot snapshot = snapshot(statement.tableName())) {
+                if (retries > 0) {
+                    LOGGER.info("event=WRITE_RETRY statement=DELETE table={} snapshotVersion={} attempt={} maxRetries={}",
+                            clean(statement.tableName()), snapshot.table().version(), retries + 1, MAX_DELETE_RETRIES);
+                }
+                new Binder(this).bind(statement, snapshot.table());
+                return delete(statement, snapshot.table());
+            } catch (ConflictException error) {
+                // The failed snapshot closes before the next attempt can acquire a newer one.
+                if (retries == MAX_DELETE_RETRIES) {
+                    throw error;
+                }
+            }
         }
     }
 
@@ -220,8 +254,8 @@ public final class StorageEngine {
             }
             long version = table.version();
             if (deleted > 0) {
-                version = Math.incrementExact(version);
-                catalogStore.save(new TableCatalog(table.tableName(), table.columns(), version, partitions));
+                beforeCommit.run();
+                version = catalogStore.commit(table, partitions);
             }
             LOGGER.debug("statement=DELETE table={} rowsDeleted={} partitionsRewritten={} partitionsCarried={} version={} durationMs={}",
                     clean(table.tableName()), deleted, rewritten, carried, version, elapsedMillis(started));
@@ -261,8 +295,9 @@ public final class StorageEngine {
      * @return matching rows in schema column order
      * @throws IllegalArgumentException if a name or the constant type is invalid
      */
-    public synchronized List<Object[]> select(String tableName, String columnName,
+    public List<Object[]> select(String tableName, String columnName,
             Comparison comparison, Object constant) {
+        initializeLoggingContext();
         long started = System.nanoTime();
         try (CatalogStore.Snapshot snapshot = snapshot(tableName)) {
             if (comparison == null) {
@@ -274,6 +309,7 @@ public final class StorageEngine {
             // Binding validates names and constant types before planning.
             new Binder(this).bind(statement, snapshot.table());
             Operator operator = new Planner(this).plan(statement, snapshot.table());
+            ScanStats stats = lastScanStats();
 
             List<Object[]> result = new ArrayList<>();
             operator.open();
@@ -287,7 +323,7 @@ public final class StorageEngine {
 
             LOGGER.debug("statement=SELECT table={} column={} comparison={} const={} partitionsRead={} partitionsPruned={} rowsOut={} version={} durationMs={}",
                     clean(tableName), clean(columnName), comparison, clean(constant),
-                    lastScanStats.partitionsRead(), lastScanStats.partitionsPruned(),
+                    stats.partitionsRead(), stats.partitionsPruned(),
                     result.size(), snapshot.table().version(), elapsedMillis(started));
             return result;
         } catch (RuntimeException error) {
@@ -297,16 +333,16 @@ public final class StorageEngine {
     }
 
     /**
-     * Returns planning statistics from the most recently completed select call.
+     * Returns statistics for the most recently planned selection on the calling thread.
      *
-     * @return latest partition scan statistics
+     * @return latest partition scan statistics, or zero counts before this thread plans a selection
      */
     public ScanStats lastScanStats() {
-        return lastScanStats;
+        return lastScanStats.get();
     }
 
     void recordScanStats(ScanStats scanStats) {
-        lastScanStats = Objects.requireNonNull(scanStats, "scanStats");
+        lastScanStats.set(Objects.requireNonNull(scanStats, "scanStats"));
     }
 
     static void validateColumns(List<ColumnSpec> columns) {
@@ -416,9 +452,10 @@ public final class StorageEngine {
                 .replace('\n', ' ').replace('\r', ' ');
     }
 
-    private static void initializeLoggingContext() {
+    /** Fills missing worker context without replacing a caller's explicit session or statement. */
+    void initializeLoggingContext() {
         if (MDC.get("sessionId") == null) {
-            MDC.put("sessionId", UUID.randomUUID().toString());
+            MDC.put("sessionId", sessionId);
         }
         if (MDC.get("statementNumber") == null) {
             MDC.put("statementNumber", "0");
