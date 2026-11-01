@@ -45,13 +45,17 @@ public final class Executor {
                 long started = System.nanoTime();
                 try {
                     try (CatalogStore.Snapshot snapshot = statement instanceof CreateTableStatement
+                            || statement instanceof DeleteStatement
                             ? null : storage.snapshot(Binder.tableName(statement))) {
                         TableCatalog table = snapshot == null ? null : snapshot.table();
-                        binder.bind(statement, table);
+                        // DELETE owns its snapshot so a retry releases and rebinds the failed base.
+                        if (!(statement instanceof DeleteStatement)) {
+                            binder.bind(statement, table);
+                        }
                         switch (statement) {
                             case CreateTableStatement create -> storage.create(create);
                             case CopyStatement copy -> storage.copy(table, copy.csvFilePath());
-                            case DeleteStatement delete -> storage.delete(delete, table);
+                            case DeleteStatement delete -> storage.delete(delete);
                             case SelectStatement select -> {
                                 int before = result.size();
                                 drain(planner.plan(select, table), result);

@@ -1,6 +1,6 @@
 package dk.itu.boomdb;
 
-/** Indicates that a table changed after a statement read its base version. */
+/** Indicates overlapping partition changes; DELETE retries before exposing a terminal conflict. */
 public final class ConflictException extends RuntimeException {
     /**
      * Creates a conflict error with a message describing the competing versions.

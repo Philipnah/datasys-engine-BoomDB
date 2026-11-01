@@ -21,6 +21,114 @@ class CatalogStoreTest {
     private static final List<ColumnSpec> COLUMNS = List.of(new ColumnSpec("id", ColumnType.LONG));
 
     @Test
+    void staleCopyKeepsBothAdditionsWithDistinctNumericIds(@TempDir Path directory) {
+        CatalogStore store = new CatalogStore(directory);
+        PartitionMetadata original = partition(0, "original.bin");
+        TableCatalog base = new TableCatalog("t", COLUMNS, 1, List.of(original));
+        store.save(base);
+        store.commit(base, List.of(original, partition(1, "winner.bin")));
+
+        assertEquals(3, store.commit(base, List.of(original, partition(1, "loser.bin"))));
+
+        TableCatalog current = store.load("t").orElseThrow();
+        assertEquals(List.of("original.bin", "winner.bin", "loser.bin"), names(current));
+        assertEquals(List.of(0, 1, 2), current.partitions().stream().map(PartitionMetadata::id).toList());
+        assertEquals(current, new CatalogStore(directory).load("t").orElseThrow());
+    }
+
+    @Test
+    void staleCopyDoesNotRestoreARewrittenOriginal(@TempDir Path directory) {
+        CatalogStore store = new CatalogStore(directory);
+        PartitionMetadata original = partition(0, "original.bin");
+        TableCatalog base = new TableCatalog("t", COLUMNS, 1, List.of(original));
+        store.save(base);
+        store.commit(base, List.of(partition(1, "survivors.bin")));
+
+        store.commit(base, List.of(original, partition(1, "copy.bin")));
+
+        assertEquals(List.of("survivors.bin", "copy.bin"), names(store.load("t").orElseThrow()));
+    }
+
+    @Test
+    void staleDeleteKeepsConcurrentCopyAndOnlyItsOwnSurvivors(@TempDir Path directory) {
+        CatalogStore store = new CatalogStore(directory);
+        PartitionMetadata original = partition(0, "original.bin");
+        PartitionMetadata carried = partition(1, "carried.bin");
+        TableCatalog base = new TableCatalog("t", COLUMNS, 1, List.of(original, carried));
+        store.save(base);
+        store.commit(base, List.of(original, carried, partition(2, "copy.bin")));
+
+        store.commit(base, List.of(partition(2, "survivors.bin"), carried));
+
+        assertEquals(List.of("carried.bin", "copy.bin", "survivors.bin"),
+                names(store.load("t").orElseThrow()));
+    }
+
+    @Test
+    void deletesOfDisjointOriginalsRebase(@TempDir Path directory) {
+        CatalogStore store = new CatalogStore(directory);
+        PartitionMetadata first = partition(0, "first.bin");
+        PartitionMetadata second = partition(1, "second.bin");
+        TableCatalog base = new TableCatalog("t", COLUMNS, 1, List.of(first, second));
+        store.save(base);
+        store.commit(base, List.of(partition(2, "winner.bin"), second));
+
+        assertEquals(3, store.commit(base, List.of(first, partition(2, "loser.bin"))));
+
+        assertEquals(List.of("winner.bin", "loser.bin"), names(store.load("t").orElseThrow()));
+    }
+
+    @Test
+    void overlappingDeletesRejectStaleSurvivorsEvenWhenWinnerRemovedEverything(@TempDir Path directory) {
+        CatalogStore store = new CatalogStore(directory);
+        TableCatalog base = new TableCatalog("t", COLUMNS, 1, List.of(partition(0, "original.bin")));
+        store.save(base);
+        store.commit(base, List.of());
+        TableCatalog winner = store.load("t").orElseThrow();
+
+        assertThrows(ConflictException.class,
+                () -> store.commit(base, List.of(partition(1, "stale-survivors.bin"))));
+
+        assertEquals(winner, store.load("t").orElseThrow());
+        assertEquals(winner, new CatalogStore(directory).load("t").orElseThrow());
+    }
+
+    @Test
+    void staleDeleteOfAllBaseRowsPreservesConcurrentInserts(@TempDir Path directory) {
+        CatalogStore store = new CatalogStore(directory);
+        PartitionMetadata original = partition(0, "original.bin");
+        TableCatalog base = new TableCatalog("t", COLUMNS, 1, List.of(original));
+        store.save(base);
+        store.commit(base, List.of(original, partition(1, "copy.bin")));
+
+        store.commit(base, List.of());
+
+        assertEquals(List.of("copy.bin"), names(store.load("t").orElseThrow()));
+    }
+
+    @Test
+    void rebaseNeedsOnlyPinnedBaseAndLatestVersionAfterRetention(@TempDir Path directory) {
+        CatalogStore store = new CatalogStore(directory);
+        PartitionMetadata original = partition(0, "original.bin");
+        store.save(new TableCatalog("t", COLUMNS, 1, List.of(original)));
+        try (CatalogStore.Snapshot pinned = store.acquire("t")) {
+            for (int i = 0; i < 7; i++) {
+                TableCatalog current = store.load("t").orElseThrow();
+                List<PartitionMetadata> next = new ArrayList<>(current.partitions());
+                next.add(partition(i + 1, "copy-" + i + ".bin"));
+                store.commit(current, next);
+            }
+            assertFalse(Files.exists(directory.resolve("catalogs/versions/t-v2.json")));
+
+            assertEquals(9, store.commit(pinned.table(), List.of(partition(1, "survivors.bin"))));
+
+            assertEquals(List.of("copy-0.bin", "copy-1.bin", "copy-2.bin", "copy-3.bin",
+                    "copy-4.bin", "copy-5.bin", "copy-6.bin", "survivors.bin"),
+                    names(store.load("t").orElseThrow()));
+        }
+    }
+
+    @Test
     void restartChoosesNumericFinalizedVersionAndIgnoresTemporaryFiles(@TempDir Path directory)
             throws Exception {
         CatalogStore store = new CatalogStore(directory);
@@ -143,6 +251,14 @@ class CatalogStoreTest {
                     snapshot.table().partitions().getFirst().statistics());
             assertThrows(UnsupportedOperationException.class, snapshot.table().partitions()::clear);
         }
+    }
+
+    private static PartitionMetadata partition(int id, String fileName) {
+        return new PartitionMetadata(id, fileName, 1, List.of(new ColumnStatistics("id", "1", "1")));
+    }
+
+    private static List<String> names(TableCatalog table) {
+        return table.partitions().stream().map(PartitionMetadata::fileName).toList();
     }
 
     private static TableCatalog table(String name, long version) {

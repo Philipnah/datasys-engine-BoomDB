@@ -21,7 +21,8 @@ import org.slf4j.MDC;
 /** Stores typed tables in persistent PAX partitions and executes planned selections. */
 public final class StorageEngine {
     private static final Logger LOGGER = LoggerFactory.getLogger(StorageEngine.class);
-    private static final int DEFAULT_MAX_ROWS_PER_PARTITION = 10_000;
+    private static final int DEFAULT_MAX_ROWS_PER_PARTITION = 16_384;
+    private static final int MAX_DELETE_RETRIES = 3;
 
     private final CatalogStore catalogStore;
     private final Path partitionDirectory;
@@ -118,11 +119,11 @@ public final class StorageEngine {
 
     /**
      * Appends a headerless CSV file as fresh immutable partitions and commits a new version.
+     * Concurrent commits rebase these additions onto the latest catalog instead of causing a conflict.
      *
      * @param tableName destination table
      * @param csvFilePath path to the headerless ASCII CSV input
      * @throws IllegalArgumentException if the table or a CSV row is invalid
-     * @throws ConflictException if another writer commits after this statement starts
      */
     public void copyFile(String tableName, String csvFilePath) {
         long started = System.nanoTime();
@@ -161,22 +162,45 @@ public final class StorageEngine {
     /**
      * Removes matching rows by publishing a new catalog with copy-on-write partitions.
      * A predicate that matches nothing leaves the table's version unchanged.
+     * Overlapping partition changes are retried up to three times from fresh snapshots;
+     * each retry evaluates the latest rows, including any intervening inserts.
      *
      * @param tableName table to delete from
      * @param where optional typed predicate; empty removes all rows
      * @return number of rows deleted
      * @throws IllegalArgumentException if a referenced name or constant type is invalid
-     * @throws ConflictException if another writer commits before this deletion is published
+     * @throws ConflictException if all four attempts conflict with overlapping partition changes
      */
     public long delete(String tableName, Optional<Predicate> where) {
         long started = System.nanoTime();
-        try (CatalogStore.Snapshot snapshot = snapshot(tableName)) {
+        try {
             DeleteStatement statement = new DeleteStatement(tableName, where);
-            new Binder(this).bind(statement, snapshot.table());
-            return delete(statement, snapshot.table());
+            return delete(statement);
         } catch (RuntimeException error) {
             logFailure("DELETE", tableName, started, error);
             throw error;
+        }
+    }
+
+    /**
+     * Executes one logical DELETE, rebinding a fresh snapshot after each partition conflict.
+     * SQL and direct API calls share this retry budget; their outer boundaries log final failures.
+     */
+    long delete(DeleteStatement statement) {
+        for (int retries = 0; ; retries++) {
+            try (CatalogStore.Snapshot snapshot = snapshot(statement.tableName())) {
+                if (retries > 0) {
+                    LOGGER.info("event=WRITE_RETRY statement=DELETE table={} snapshotVersion={} attempt={} maxRetries={}",
+                            clean(statement.tableName()), snapshot.table().version(), retries + 1, MAX_DELETE_RETRIES);
+                }
+                new Binder(this).bind(statement, snapshot.table());
+                return delete(statement, snapshot.table());
+            } catch (ConflictException error) {
+                // The failed snapshot closes before the next attempt can acquire a newer one.
+                if (retries == MAX_DELETE_RETRIES) {
+                    throw error;
+                }
+            }
         }
     }
 
