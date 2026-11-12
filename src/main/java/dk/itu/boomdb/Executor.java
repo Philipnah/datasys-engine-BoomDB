@@ -45,12 +45,20 @@ public final class Executor {
                 MDC.put("statementNumber", String.valueOf(statementNumber++));
                 long started = System.nanoTime();
                 try {
-                    try (CatalogStore.Snapshot snapshot = statement instanceof CreateTableStatement
-                            || statement instanceof DeleteStatement
-                            ? null : storage.snapshot(Binder.tableName(statement))) {
-                        TableCatalog table = snapshot == null ? null : snapshot.table();
+                    List<String> tableNames = switch (statement) {
+                        case SelectStatement select -> select.tableNames();
+                        case CopyStatement copy -> List.of(copy.tableName());
+                        case CreateTableStatement create -> List.of();
+                        case DeleteStatement delete -> List.of();
+                    };
+                    // Acquire every SELECT lease before binding or any planning diagnostics.
+                    try (CatalogStore.Snapshots snapshots = storage.snapshots(tableNames)) {
+                        List<TableCatalog> tables = snapshots.tables();
+                        TableCatalog table = tables.isEmpty() ? null : tables.getFirst();
                         // DELETE owns its snapshot so a retry releases and rebinds the failed base.
-                        if (!(statement instanceof DeleteStatement)) {
+                        if (statement instanceof SelectStatement select) {
+                            binder.bind(select, tables);
+                        } else if (!(statement instanceof DeleteStatement)) {
                             binder.bind(statement, table);
                         }
                         switch (statement) {
@@ -59,14 +67,17 @@ public final class Executor {
                             case DeleteStatement delete -> storage.delete(delete);
                             case SelectStatement select -> {
                                 int before = result.size();
-                                Operator plan = planner.plan(select, table);
+                                Operator plan = planner.plan(select, tables);
                                 // Keep the statement's counts even if execution starts another selection.
                                 ScanStats stats = storage.lastScanStats();
                                 drain(plan, result);
                                 // close() has finished, including its diagnostic logging.
                                 LOGGER.debug("statement=SELECT table={} rowsOut={} partitionsRead={} partitionsPruned={} version={} durationMs={}",
-                                        clean(table.tableName()), result.size() - before,
-                                        stats.partitionsRead(), stats.partitionsPruned(), table.version(),
+                                        clean(Binder.tableName(select)), result.size() - before,
+                                        stats.partitionsRead(), stats.partitionsPruned(),
+                                        tables.size() == 1 ? String.valueOf(table.version())
+                                                : String.join(";", tables.stream().map(catalog ->
+                                                        catalog.tableName() + "=" + catalog.version()).toList()),
                                         (System.nanoTime() - started) / 1_000_000);
                             }
                         }

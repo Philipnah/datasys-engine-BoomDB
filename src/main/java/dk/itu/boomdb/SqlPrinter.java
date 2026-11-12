@@ -1,6 +1,8 @@
 package dk.itu.boomdb;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -22,17 +24,27 @@ public final class SqlPrinter {
             }
             case CopyStatement copy ->
                 "COPY " + copy.tableName() + " FROM '" + copy.csvFilePath() + "';";
-            case SelectStatement select ->
-                "SELECT * FROM " + select.tableName() + where(select.where()) + ";";
+            case SelectStatement select -> {
+                List<String> predicates = new ArrayList<>();
+                select.filters().forEach(filter -> predicates.add(predicate(filter)));
+                select.joins().forEach(join -> predicates.add(
+                        join.leftColumn() + " = " + join.rightColumn()));
+                yield "SELECT * FROM " + String.join(", ", select.tableNames())
+                        + (predicates.isEmpty() ? "" : " WHERE " + String.join(" AND ", predicates)) + ";";
+            }
             case DeleteStatement delete ->
                 "DELETE FROM " + delete.tableName() + where(delete.where()) + ";";
         };
     }
 
     private static String where(Optional<Predicate> where) {
-        return where.map(predicate -> " WHERE " + predicate.columnName() + " "
-                + symbol(predicate.comparison()) + " " + literal(predicate.constant()))
+        return where.map(predicate -> " WHERE " + predicate(predicate))
                 .orElse("");
+    }
+
+    private static String predicate(Predicate predicate) {
+        return predicate.columnName() + " " + symbol(predicate.comparison())
+                + " " + literal(predicate.constant());
     }
 
     private static String symbol(Comparison comparison) {

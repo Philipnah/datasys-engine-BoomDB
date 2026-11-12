@@ -11,9 +11,12 @@ columnType  : STRING | LONG | DOUBLE ;
 
 copy        : COPY IDENTIFIER FROM STRING_LITERAL ;
 
-select      : SELECT '*' FROM IDENTIFIER (WHERE predicate)? ;
-delete      : DELETE FROM IDENTIFIER (WHERE predicate)? ;
-predicate   : IDENTIFIER comparison=('=' | '<' | '>') literal ;
+select      : SELECT '*' FROM IDENTIFIER (',' IDENTIFIER)* (WHERE condition)? ;
+delete      : DELETE FROM IDENTIFIER (WHERE filter)? ;
+condition   : predicate (AND predicate)* ;
+predicate   : filter | join ;
+filter      : IDENTIFIER comparison=('=' | '<' | '>') literal ;
+join        : left=IDENTIFIER '=' right=IDENTIFIER ;
 literal     : STRING_LITERAL | LONG_LITERAL | DOUBLE_LITERAL ;
 
 // Keyword rules precede IDENTIFIER so equal-length words remain keywords.
@@ -24,6 +27,7 @@ FROM   : 'FROM' ;
 SELECT : 'SELECT' ;
 DELETE : 'DELETE' ;
 WHERE  : 'WHERE' ;
+AND    : 'AND' ;
 STRING : 'STRING' ;
 LONG   : 'LONG' ;
 DOUBLE : 'DOUBLE' ;

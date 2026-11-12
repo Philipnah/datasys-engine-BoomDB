@@ -46,4 +46,10 @@ public final class ScanOperator implements Operator {
     List<PartitionMetadata> partitions() {
         return partitions;
     }
+
+    /** Retains this scan's pruning counts independently of later table planning. */
+    ScanStats scanStats() {
+        return new ScanStats(table.partitions().size(), partitions.size(),
+                table.partitions().size() - partitions.size());
+    }
 }
