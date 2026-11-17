@@ -1,18 +1,23 @@
 package dk.itu.boomdb;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+
+import org.antlr.v4.runtime.Token;
+
 import dk.itu.datasys.sql.SqlBaseVisitor;
 import dk.itu.datasys.sql.SqlParser.ColumnDefContext;
 import dk.itu.datasys.sql.SqlParser.CopyContext;
 import dk.itu.datasys.sql.SqlParser.CreateTableContext;
 import dk.itu.datasys.sql.SqlParser.DeleteContext;
+import dk.itu.datasys.sql.SqlParser.FilterContext;
+import dk.itu.datasys.sql.SqlParser.JoinContext;
 import dk.itu.datasys.sql.SqlParser.LiteralContext;
 import dk.itu.datasys.sql.SqlParser.PredicateContext;
 import dk.itu.datasys.sql.SqlParser.ScriptContext;
 import dk.itu.datasys.sql.SqlParser.SelectContext;
-import java.util.List;
-import java.util.Locale;
-import java.util.Optional;
-import org.antlr.v4.runtime.Token;
 
 /** Converts generated ANTLR parse trees into BoomDB's typed SQL AST. */
 final class SqlAstBuilder extends SqlBaseVisitor<Object> {
@@ -46,22 +51,31 @@ final class SqlAstBuilder extends SqlBaseVisitor<Object> {
 
     @Override
     public SelectStatement visitSelect(SelectContext context) {
-        Optional<Predicate> predicate = context.predicate() == null
-                ? Optional.empty()
-                : Optional.of((Predicate) visit(context.predicate()));
-        return new SelectStatement(context.IDENTIFIER().getText(), predicate);
+        List<Predicate> filters = new ArrayList<>();
+        List<JoinPredicate> joins = new ArrayList<>();
+        if (context.condition() != null) {
+            for (PredicateContext predicate : context.condition().predicate()) {
+                if (predicate.filter() != null) {
+                    filters.add(visitFilter(predicate.filter()));
+                } else {
+                    joins.add(visitJoin(predicate.join()));
+                }
+            }
+        }
+        return new SelectStatement(context.IDENTIFIER().stream()
+                .map(identifier -> identifier.getText()).toList(), filters, joins);
     }
 
     @Override
     public DeleteStatement visitDelete(DeleteContext context) {
-        Optional<Predicate> predicate = context.predicate() == null
+        Optional<Predicate> predicate = context.filter() == null
                 ? Optional.empty()
-                : Optional.of((Predicate) visit(context.predicate()));
+                : Optional.of(visitFilter(context.filter()));
         return new DeleteStatement(context.IDENTIFIER().getText(), predicate);
     }
 
     @Override
-    public Predicate visitPredicate(PredicateContext context) {
+    public Predicate visitFilter(FilterContext context) {
         Comparison comparison = switch (context.comparison.getText()) {
             case "=" -> Comparison.EQUALS;
             case "<" -> Comparison.LESS_THAN;
@@ -70,6 +84,11 @@ final class SqlAstBuilder extends SqlBaseVisitor<Object> {
         };
         return new Predicate(context.IDENTIFIER().getText(), comparison,
                 visit(context.literal()));
+    }
+
+    @Override
+    public JoinPredicate visitJoin(JoinContext context) {
+        return new JoinPredicate(context.left.getText(), context.right.getText());
     }
 
     @Override

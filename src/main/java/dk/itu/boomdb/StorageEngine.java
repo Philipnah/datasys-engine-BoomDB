@@ -285,6 +285,10 @@ public final class StorageEngine {
         return catalogStore.acquire(tableName);
     }
 
+    CatalogStore.Snapshots snapshots(List<String> tableNames) {
+        return catalogStore.acquire(tableNames);
+    }
+
     /**
      * Returns rows matching a typed comparison in their persisted order.
      *

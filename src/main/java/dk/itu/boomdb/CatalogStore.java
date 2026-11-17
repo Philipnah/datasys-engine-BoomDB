@@ -65,6 +65,24 @@ final class CatalogStore {
         return acquire(tableName, table.version());
     }
 
+    /** Pins all statement tables before planning; partial acquisition releases its leases. */
+    synchronized Snapshots acquire(List<String> tableNames) {
+        List<Snapshot> snapshots = new ArrayList<>();
+        try {
+            for (String tableName : tableNames) {
+                snapshots.add(acquire(tableName));
+            }
+            return new Snapshots(snapshots);
+        } catch (RuntimeException error) {
+            try {
+                new Snapshots(snapshots).close();
+            } catch (RuntimeException cleanup) {
+                error.addSuppressed(cleanup);
+            }
+            throw error;
+        }
+    }
+
     /** Pins a retained version, or rejects an unknown or expired version. */
     synchronized Snapshot acquire(String tableName, long version) {
         Version entry = versions(tableName).get(version);
@@ -237,6 +255,33 @@ final class CatalogStore {
             } catch (IOException error) {
                 // A cleanup failure must not report a successfully published commit as aborted.
                 LOGGER.warn("cannot expire catalog {}", version.path, error);
+            }
+        }
+    }
+
+    /** Statement-scoped group of leases, ordered exactly like the FROM list. */
+    record Snapshots(List<Snapshot> snapshots) implements AutoCloseable {
+        List<TableCatalog> tables() {
+            return snapshots.stream().map(Snapshot::table).toList();
+        }
+
+        @Override
+        public void close() {
+            // Release every lease even if retention cleanup fails for an earlier table.
+            RuntimeException failure = null;
+            for (Snapshot snapshot : snapshots) {
+                try {
+                    snapshot.close();
+                } catch (RuntimeException error) {
+                    if (failure == null) {
+                        failure = error;
+                    } else {
+                        failure.addSuppressed(error);
+                    }
+                }
+            }
+            if (failure != null) {
+                throw failure;
             }
         }
     }

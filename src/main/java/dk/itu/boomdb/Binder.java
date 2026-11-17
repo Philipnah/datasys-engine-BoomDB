@@ -25,7 +25,11 @@ public final class Binder {
      * @throws IllegalArgumentException if a referenced name or value type is invalid
      */
     public void bind(Statement statement) {
-        if (statement instanceof CreateTableStatement) {
+        if (statement instanceof SelectStatement select) {
+            try (CatalogStore.Snapshots snapshots = engine.snapshots(select.tableNames())) {
+                bind(select, snapshots.tables());
+            }
+        } else if (statement instanceof CreateTableStatement) {
             bind(statement, null);
         } else {
             try (CatalogStore.Snapshot snapshot = engine.snapshot(tableName(statement))) {
@@ -43,7 +47,7 @@ public final class Binder {
         switch (statement) {
             case CreateTableStatement create -> StorageEngine.validateColumns(create.columns());
             case CopyStatement copy -> Objects.requireNonNull(table, "table");
-            case SelectStatement select -> bindPredicate("SELECT", table, select.where());
+            case SelectStatement select -> bind(select, List.of(table));
             case DeleteStatement delete -> bindPredicate("DELETE", table, delete.where());
         }
     }
@@ -52,9 +56,32 @@ public final class Binder {
         return switch (statement) {
             case CreateTableStatement create -> create.tableName();
             case CopyStatement copy -> copy.tableName();
-            case SelectStatement select -> select.tableName();
+            case SelectStatement select -> String.join(", ", select.tableNames());
             case DeleteStatement delete -> delete.tableName();
         };
+    }
+
+    /** Shares the statement's pinned schemas and the planner's unqualified-name rules. */
+    void bind(SelectStatement select, List<TableCatalog> tables) {
+        ColumnResolver resolver = new ColumnResolver(tables);
+        for (Predicate filter : select.filters()) {
+            var column = resolver.resolve(filter.columnName());
+            StorageEngine.requireConstantType("SELECT", column.tableName(), filter.columnName(),
+                    column.type(), filter.constant());
+        }
+        for (JoinPredicate join : select.joins()) {
+            var left = resolver.resolve(join.leftColumn());
+            var right = resolver.resolve(join.rightColumn());
+            if (left.tableName().equals(right.tableName())) {
+                throw new IllegalArgumentException("join columns must belong to different tables: "
+                        + join.leftColumn() + ", " + join.rightColumn());
+            }
+            if (left.type() != right.type()) {
+                throw new IllegalArgumentException("join column types must match: "
+                        + join.leftColumn() + " " + left.type() + ", "
+                        + join.rightColumn() + " " + right.type());
+            }
+        }
     }
 
     private void bindPredicate(String operation, TableCatalog table, Optional<Predicate> where) {
