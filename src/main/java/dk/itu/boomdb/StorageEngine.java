@@ -13,6 +13,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -203,7 +204,21 @@ public final class StorageEngine {
                 return delete(statement, snapshot.table());
             } catch (ConflictException error) {
                 // The failed snapshot closes before the next attempt can acquire a newer one.
-                if (retries == MAX_DELETE_RETRIES) {
+                boolean exhausted = retries == MAX_DELETE_RETRIES;
+                ConflictException.Details details = error.details();
+                if (details != null) {
+                    String partitions = details.partitionIds().stream()
+                            .map(Object::toString)
+                            .collect(Collectors.joining("|", "[", "]"));
+                    // COPY only appends. A missing original must have been changed by DELETE.
+                    LOGGER.warn("event=WRITE_CONFLICT table={} baseVersion={} currentVersion={}"
+                                    + " statement=DELETE conflictingStatement=DELETE conflictingPartitions={} resolution={}",
+                            clean(statement.tableName()), details.baseVersion(), details.currentVersion(),
+                            partitions, exhausted ? "ABORT_RETRY_LIMIT" : "RETRY_FRESH_SNAPSHOT");
+                }
+                // The SQL/API boundary logs this message once, like every other mutation failure.
+                // Recovered conflicts stop here; only an exhausted retry reaches that boundary.
+                if (exhausted) {
                     throw error;
                 }
             }
