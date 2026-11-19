@@ -10,7 +10,9 @@
     </RollingFile>
     <!-- Console copy for debugging; stderr keeps stdout clean for program output -->
     <Console name="Console" target="SYSTEM_ERR">
-      <PatternLayout pattern="%d{HH:mm:ss.SSS} %level %logger{1} - %m%n"/>
+        <!-- We decided to print the same format as the CSV log in the console -->
+      <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS},%X{sessionId},%X{statementNumber},%tid,%level,%logger{1},%m%n"/>
+        <!-- <PatternLayout pattern="%d{HH:mm:ss.SSS} %level %logger{1} - %m%n"/> -->
     </Console>
   </Appenders>
   <Loggers>
