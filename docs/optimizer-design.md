@@ -3,9 +3,10 @@ The planner knows row count per partition in the catalog for any given table.
 The number of distinct values per column, NDV, is also stored in the catalog per partition alongside the min/max statistics.
 
 # Where they live and how they merge:
-NDV is the number of distinct values of column of the whole table.
+NDV is an estimated number of distinct values in a column across the whole table.
 NDV should live in catalog for each partition in a table.
-Using Max NDV approach is the easiest to implement compared to HyperLogLog (I think we should do this @Thorbjørn, @Philip agrees), but it can also be very wrong and is not necessarily accurate. It is simply the lower bound of the possible true NDV value, so depending on the data it might be pretty accurate or completely off the mark.
+Using Max NDV approach is the easiest to implement compared to HyperLogLog, but it can also be very wrong and is not necessarily accurate. 
+It is simply the lower bound of the possible true NDV value, so depending on the data it might be pretty accurate or completely off the mark.
 
 # Roll forward:
 You can roll forward by running through the partition files referenced in the catalog, collecting the data needed for the statistic, and adding the statistic to the catalog. 
