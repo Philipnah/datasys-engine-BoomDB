@@ -71,6 +71,7 @@ class WriteConcurrencyIT {
         int conflicts = winner.equals("COPY") ? 0 : 1;
         assertEquals(conflicts, events(logs, "WRITE_CONFLICT").size());
         assertEquals(conflicts, events(logs, "WRITE_RETRY").size());
+        assertEquals(1 - conflicts, events(logs, "WRITE_REBASE").size());
         assertFalse(logs.stream().anyMatch(line -> line.contains(",ERROR,")));
         List<Long> writerIds = logs.stream()
                 .filter(line -> line.contains(",StorageEngine,statement=COPY ")
@@ -234,7 +235,13 @@ class WriteConcurrencyIT {
         assertEquals(1, attempts.get());
         assertRows(storage, 3, expected);
         assertRows(new StorageEngine(directory.resolve("db")), 3, expected);
-        assertFalse(logsSince(logStart).stream().anyMatch(line -> line.contains("event=WRITE_")));
+        List<String> writes = logsSince(logStart).stream()
+                .filter(line -> line.contains("event=WRITE_")).toList();
+        assertEquals(1, writes.size(), writes.toString());
+        String[] fields = writes.getFirst().split(",", -1);
+        assertEquals(7, fields.length);
+        assertEquals("event=WRITE_REBASE statement=" + loser
+                + " table=t baseVersion=1 currentVersion=2 committedVersion=3", fields[6]);
     }
 
     @Test
@@ -281,14 +288,19 @@ class WriteConcurrencyIT {
     @ValueSource(booleans = {false, true})
     void overlappingDeleteRetriesFromWinnerAndLogsTheSameStatement(boolean sql,
             @TempDir Path directory) throws Exception {
-        StorageEngine storage = copied(directory, "1\n2\n3\n", 3);
+        // Both deletes change partitions 0 and 1, and only the parked delete changes partition 2.
+        StorageEngine storage = copied(directory, "1\n2\n1\n2\n2\n3\n", 2);
+        Path inserted = directory.resolve("inserted.csv");
+        Files.writeString(inserted, "4\n");
         String session = UUID.randomUUID().toString();
         MDC.put("sessionId", session);
         MDC.put("statementNumber", "7");
         storage.beforeCommit = () -> {
             storage.beforeCommit = () -> {};
-            storage.delete("t", equalTo(1));
-            assertRows(storage, 2, "2 3");
+            assertEquals(2, storage.delete("t", equalTo(1)));
+            // The latest catalog comes from COPY, but DELETE changed the original partitions.
+            storage.copyFile("t", inserted.toString());
+            assertRows(storage, 3, "2 2 2 3 4");
         };
         int logStart = Files.readAllLines(LOG_FILE).size();
 
@@ -296,7 +308,7 @@ class WriteConcurrencyIT {
             // The conflict belongs to statement 2, including after the internal retry.
             new Executor(storage).execute("SELECT * FROM t; DELETE FROM t WHERE id = 2;");
         } else {
-            assertEquals(1, storage.delete("t", equalTo(2)));
+            assertEquals(3, storage.delete("t", equalTo(2)));
         }
 
         List<String> logs = logsSince(logStart);
@@ -304,16 +316,20 @@ class WriteConcurrencyIT {
         List<String> retries = events(logs, "WRITE_RETRY");
         assertEquals(1, conflicts.size());
         assertEquals(1, retries.size());
-        assertTrue(conflicts.getFirst().contains("baseVersion=1 currentVersion=2"));
-        assertTrue(retries.getFirst().contains("snapshotVersion=2 attempt=2"));
+        String conflict = conflicts.getFirst();
+        assertTrue(conflict.contains("baseVersion=1 currentVersion=3"), conflict);
+        assertTrue(conflict.contains("conflictingPartitions=[0|1]"), conflict);
+        assertTrue(conflict.contains("statement=DELETE conflictingStatement=DELETE"), conflict);
+        assertTrue(conflict.contains("resolution=RETRY_FRESH_SNAPSHOT"), conflict);
+        assertTrue(retries.getFirst().contains("snapshotVersion=3 attempt=2"));
         for (String event : List.of(conflicts.getFirst(), retries.getFirst())) {
             assertEquals(7, event.split(",", -1).length);
             assertEquals(session, event.split(",", -1)[1]);
             assertEquals(sql ? "2" : "7", event.split(",", -1)[2]);
         }
         assertFalse(logs.stream().anyMatch(line -> line.contains(",ERROR,")));
-        assertRows(storage, 3, "3");
-        assertRows(new StorageEngine(directory.resolve("db")), 3, "3");
+        assertRows(storage, 4, "3 4");
+        assertRows(new StorageEngine(directory.resolve("db")), 4, "3 4");
     }
 
     @ParameterizedTest
@@ -393,7 +409,14 @@ class WriteConcurrencyIT {
         assertRows(storage, 5, "5 6");
         assertRows(new StorageEngine(directory.resolve("db")), 5, "5 6");
         List<String> logs = logsSince(logStart);
-        assertEquals(4, events(logs, "WRITE_CONFLICT").size());
+        List<String> conflicts = events(logs, "WRITE_CONFLICT");
+        assertEquals(4, conflicts.size());
+        assertTrue(conflicts.subList(0, 3).stream()
+                .allMatch(line -> line.contains("resolution=RETRY_FRESH_SNAPSHOT")), conflicts.toString());
+        String terminalConflict = conflicts.getLast();
+        assertTrue(terminalConflict.contains("conflictingPartitions=[3]"), terminalConflict);
+        assertTrue(terminalConflict.contains("statement=DELETE conflictingStatement=DELETE"), terminalConflict);
+        assertTrue(terminalConflict.contains("resolution=ABORT_RETRY_LIMIT"), terminalConflict);
         assertEquals(3, events(logs, "WRITE_RETRY").size());
         List<String> errors = logs.stream().filter(line -> line.contains(",ERROR,")).toList();
         assertEquals(1, errors.size());
@@ -413,8 +436,13 @@ class WriteConcurrencyIT {
     void publicationFailureDoesNotRetry(boolean sql, @TempDir Path directory) throws Exception {
         StorageEngine storage = copied(directory, "1\n2\n", 2);
         AtomicInteger attempts = new AtomicInteger();
-        storage.beforeCommit = attempts::incrementAndGet;
-        Files.createDirectory(directory.resolve("db/catalogs/versions/t-v2.json"));
+        storage.beforeCommit = () -> {
+            attempts.incrementAndGet();
+            storage.beforeCommit = () -> {};
+            // Make the DELETE rebase, then block publication of its merged version.
+            storage.copyFile("t", directory.resolve("rows.csv").toString());
+        };
+        Files.createDirectory(directory.resolve("db/catalogs/versions/t-v3.json"));
         int logStart = Files.readAllLines(LOG_FILE).size();
 
         assertThrows(IllegalArgumentException.class, () -> {
@@ -426,7 +454,7 @@ class WriteConcurrencyIT {
         });
 
         assertEquals(1, attempts.get());
-        assertRows(storage, 1, "1 2");
+        assertRows(storage, 2, "1 1 2 2");
         assertFalse(logsSince(logStart).stream().anyMatch(line -> line.contains("event=WRITE_")));
     }
 

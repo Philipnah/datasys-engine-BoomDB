@@ -96,6 +96,7 @@ final class CatalogStore {
     /**
      * Rebases disjoint partition changes and publishes the next version as one operation.
      * Partition preparation happens before acquiring this monitor; rejected files stay orphaned.
+     * Rebases are logged after the merged catalog has been published.
      *
      * @param base catalog pinned when the statement started
      * @param partitions prepared partition list to publish
@@ -106,18 +107,22 @@ final class CatalogStore {
         // ponytail: one store monitor serializes commits; per-table locks if throughput requires it.
         TableCatalog current = load(base.tableName())
                 .orElseThrow(() -> new IllegalArgumentException("unknown table: " + base.tableName()));
+        String rebasedStatement = null;
         if (base.version() != current.version()) {
             Set<String> baseFiles = partitionFiles(base.partitions());
             Set<String> removed = new HashSet<>(baseFiles);
             removed.removeAll(partitionFiles(partitions));
-            if (!partitionFiles(current.partitions()).containsAll(removed)) {
-                LOGGER.warn("event=WRITE_CONFLICT table={} baseVersion={} currentVersion={}",
-                        base.tableName().replace(',', ';').replace('"', '\'')
-                                .replace('\n', ' ').replace('\r', ' '), base.version(), current.version());
-                // The SQL/API boundary logs this message once, like every other mutation failure.
-                // Recovered conflicts stop here; only an exhausted retry reaches that boundary.
+            Set<String> currentFiles = partitionFiles(current.partitions());
+            if (!currentFiles.containsAll(removed)) {
+                // Use immutable filenames to detect overlap, then report IDs from the pinned base.
+                List<Integer> conflictingIds = base.partitions().stream()
+                        .filter(partition -> removed.contains(partition.fileName())
+                                && !currentFiles.contains(partition.fileName()))
+                        .map(PartitionMetadata::id)
+                        .toList();
                 throw new ConflictException("conflict table=" + base.tableName()
-                        + " base=" + base.version() + " current=" + current.version());
+                        + " base=" + base.version() + " current=" + current.version(),
+                        new ConflictException.Details(base.version(), current.version(), conflictingIds));
             }
             // Apply only this writer's delta: carrying its stale base would resurrect deleted files.
             List<PartitionMetadata> merged = new ArrayList<>();
@@ -136,9 +141,17 @@ final class CatalogStore {
                 }
             }
             partitions = merged;
+            // COPY appends files. A DELETE that reaches commit always replaces or drops an original.
+            rebasedStatement = removed.isEmpty() ? "COPY" : "DELETE";
         }
         long version = Math.incrementExact(current.version());
         save(new TableCatalog(base.tableName(), base.columns(), version, partitions));
+        if (rebasedStatement != null) {
+            LOGGER.info("event=WRITE_REBASE statement={} table={} baseVersion={} currentVersion={} committedVersion={}",
+                    rebasedStatement, base.tableName().replace(',', ';').replace('"', '\'')
+                            .replace('\n', ' ').replace('\r', ' '),
+                    base.version(), current.version(), version);
+        }
         return version;
     }
 
