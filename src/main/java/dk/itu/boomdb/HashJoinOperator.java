@@ -18,6 +18,12 @@ public final class HashJoinOperator implements Operator {
     private final Operator probe;
     private final int buildKey;
     private final int probeKey;
+    private final int joinNumber;
+    private final List<String> tables;
+    private final List<String> buildTables;
+    private final List<String> probeTables;
+    private final double estimatedRows;
+    private boolean active;
     private final Map<Object, List<Object[]>> rowsByKey = new HashMap<>();
     private Iterator<Object[]> matches = Collections.emptyIterator();
     private Object[] probeRow;
@@ -26,7 +32,9 @@ public final class HashJoinOperator implements Operator {
     private long rowsProbe;
     private long rowsOut;
 
-    HashJoinOperator(Operator build, Operator probe, int buildKey, int probeKey) {
+    /** Associates this physical join with one logical step and its plan-time estimate. */
+    HashJoinOperator(Operator build, Operator probe, int buildKey, int probeKey, int joinNumber,
+            List<String> tables, List<String> buildTables, List<String> probeTables, double estimatedRows) {
         this.build = Objects.requireNonNull(build, "build");
         this.probe = Objects.requireNonNull(probe, "probe");
         if (buildKey < 0 || probeKey < 0) {
@@ -34,10 +42,16 @@ public final class HashJoinOperator implements Operator {
         }
         this.buildKey = buildKey;
         this.probeKey = probeKey;
+        this.joinNumber = joinNumber;
+        this.tables = List.copyOf(tables);
+        this.buildTables = List.copyOf(buildTables);
+        this.probeTables = List.copyOf(probeTables);
+        this.estimatedRows = estimatedRows;
     }
 
     @Override
     public void open() {
+        active = true;
         rowsByKey.clear();
         matches = Collections.emptyIterator();
         probeRow = null;
@@ -87,6 +101,8 @@ public final class HashJoinOperator implements Operator {
 
     @Override
     public void close() {
+        if (!active) return;
+        active = false;
         try {
             build.close();
         } finally {
@@ -97,7 +113,9 @@ public final class HashJoinOperator implements Operator {
                 matches = Collections.emptyIterator();
                 probeRow = null;
                 exhausted = true;
-                LOGGER.debug("rowsBuild={} rowsProbe={} rowsOut={}", rowsBuild, rowsProbe, rowsOut);
+                LOGGER.debug("join={} tables={} buildTables={} probeTables={} estRows={} rowsBuild={} rowsProbe={} rowsOut={}",
+                        joinNumber, tableList(tables), tableList(buildTables),
+                        tableList(probeTables), estimatedRows, rowsBuild, rowsProbe, rowsOut);
             }
         }
     }
@@ -108,5 +126,10 @@ public final class HashJoinOperator implements Operator {
 
     Operator probe() {
         return probe;
+    }
+
+    private static String tableList(List<String> names) {
+        return String.join(";", names).replace(',', ';').replace('"', '\'')
+                .replace('\n', ' ').replace('\r', ' ');
     }
 }

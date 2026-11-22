@@ -23,7 +23,7 @@ class EngineIT {
         assertEquals(0, result.status());
         assertEquals("""
                 Team BoomDB
-                Usage: boomdb -c '<SQL statement>' | boomdb -f <script.sql>
+                Usage: boomdb [-j optimized|syntax] (-c '<SQL statement>' | -f <script.sql>)
                 """, result.stdout());
         assertEquals("", result.stderr());
         assertFalse(Files.exists(database));
@@ -97,14 +97,36 @@ class EngineIT {
                 new String[] {"-c"},
                 new String[] {"-f"},
                 new String[] {"--bad", "value"},
-                new String[] {"-c", "CREATE TABLE cities (city STRING);", "extra"})) {
+                new String[] {"-c", "CREATE TABLE cities (city STRING);", "extra"},
+                new String[] {"-j"}, new String[] {"-j", "unknown", "-c", "SELECT * FROM t;"},
+                new String[] {"-j", "syntax", "-j", "optimized", "-c", "SELECT * FROM t;"},
+                new String[] {"-c", "SELECT * FROM t;", "-f", "missing.sql"},
+                new String[] {"-f", "missing.sql", "-j", "bad"},
+                new String[] {"-c", "SELECT * FROM t;", "-c", "SELECT * FROM t;"})) {
             RunResult result = run(args, database);
 
             assertEquals(1, result.status());
             assertEquals("", result.stdout());
-            assertEquals("Usage: boomdb -c '<SQL statement>' | boomdb -f <script.sql>\n",
+            assertEquals("Usage: boomdb [-j optimized|syntax] (-c '<SQL statement>' | -f <script.sql>)\n",
                     result.stderr());
             assertFalse(Files.exists(database));
+        }
+    }
+
+    @Test
+    void acceptsModeBeforeOrAfterCommandAndScript(@TempDir Path directory) throws Exception {
+        Path script = directory.resolve("create.sql");
+        Files.writeString(script, "CREATE TABLE cities (city STRING);");
+        int index = 0;
+        for (String mode : List.of("optimized", "syntax")) {
+            for (String[] args : List.of(
+                    new String[] {"-j", mode, "-c", "CREATE TABLE cities (city STRING);"},
+                    new String[] {"-c", "CREATE TABLE cities (city STRING);", "-j", mode},
+                    new String[] {"-j", mode, "-f", script.toString()},
+                    new String[] {"-f", script.toString(), "-j", mode})) {
+                RunResult result = run(args, directory.resolve("db" + index++));
+                assertEquals(0, result.status(), result.stderr());
+            }
         }
     }
 

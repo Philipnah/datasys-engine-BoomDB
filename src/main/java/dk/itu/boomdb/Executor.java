@@ -12,6 +12,7 @@ import org.slf4j.MDC;
 public final class Executor {
     private static final Logger LOGGER = LoggerFactory.getLogger(Executor.class);
     private final StorageEngine storage;
+    private final JoinMode mode;
 
     /**
      * Creates an executor for one persistent database.
@@ -20,7 +21,18 @@ public final class Executor {
      * @throws NullPointerException if {@code storage} is null
      */
     public Executor(StorageEngine storage) {
+        this(storage, JoinMode.OPTIMIZED);
+    }
+
+    /**
+     * Creates an executor with the requested join policy.
+     * @param storage database used for binding, planning, and execution
+     * @param mode join planning policy
+     * @throws NullPointerException if either argument is null
+     */
+    public Executor(StorageEngine storage, JoinMode mode) {
         this.storage = Objects.requireNonNull(storage, "storage");
+        this.mode = Objects.requireNonNull(mode, "mode");
     }
 
     /**
@@ -37,7 +49,7 @@ public final class Executor {
         try {
             List<Statement> statements = new SqlParser().parse(sqlText);
             Binder binder = new Binder(storage);
-            Planner planner = new Planner(storage);
+            Planner planner = new Planner(storage, mode);
             List<Object[]> result = new ArrayList<>();
             int statementNumber = 1;
 

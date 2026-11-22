@@ -357,7 +357,12 @@ record PartitionMetadata(int id, String fileName, int rowCount,
                          List<ColumnStatistics> statistics) {
     PartitionMetadata {
         statistics = List.copyOf(statistics);
+        if (rowCount < 0 || statistics.stream().anyMatch(stat -> stat.ndv() < 0
+                || stat.ndv() > rowCount || (rowCount > 0 && stat.ndv() == 0))) {
+            throw new IllegalArgumentException("invalid partition row count or NDV");
+        }
     }
 }
 
-record ColumnStatistics(String columnName, String min, String max) { }
+/** Typed column bounds and the number of distinct values in one partition. */
+record ColumnStatistics(String columnName, String min, String max, long ndv) { }

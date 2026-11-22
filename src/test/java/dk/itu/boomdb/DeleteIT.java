@@ -21,6 +21,19 @@ import org.junit.jupiter.params.provider.MethodSource;
 
 class DeleteIT {
     @Test
+    void rewriteRecomputesDistinctCount(@TempDir Path directory) throws Exception {
+        Path csv = directory.resolve("duplicates.csv");
+        Files.writeString(csv, "1\n1\n2\n");
+        StorageEngine storage = new StorageEngine(directory.resolve("db"), 3);
+        storage.createTable("t", List.of(new ColumnSpec("id", ColumnType.LONG)));
+        storage.copyFile("t", csv.toString());
+        assertEquals(1, storage.delete("t", Optional.of(new Predicate("id", Comparison.EQUALS, 2L))));
+        assertEquals(1, storage.table("t").partitions().getFirst().statistics().getFirst().ndv());
+        assertEquals(1, new StorageEngine(directory.resolve("db")).table("t")
+                .partitions().getFirst().statistics().getFirst().ndv());
+    }
+
+    @Test
     void selectiveDeleteRewritesOnlyMatchesAndPreservesOriginalFilesAndOffsets(@TempDir Path directory)
             throws Exception {
         StorageEngine storage = copied(directory, "1\n2\n3\n4\n5\n6\n7\n8\n");
@@ -33,7 +46,7 @@ class DeleteIT {
             assertEquals(2, after.version());
             assertEquals(before.partitions().subList(0, 2), after.partitions().subList(0, 2));
             assertEquals(3, after.partitions().size());
-            assertEquals(List.of(new ColumnStatistics("id", "5", "5")),
+            assertEquals(List.of(new ColumnStatistics("id", "5", "5", 1)),
                     after.partitions().getLast().statistics());
             for (int i = 0; i < before.partitions().size(); i++) {
                 byte[] actual = bytes(directory, before.partitions().get(i));

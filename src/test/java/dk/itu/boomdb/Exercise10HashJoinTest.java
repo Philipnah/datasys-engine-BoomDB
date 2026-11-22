@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -120,11 +121,54 @@ class Exercise10HashJoinTest {
         assertTrue(summary.matches(".*\\browsBuild=4\\b.*"), summaries::toString);
         assertTrue(summary.matches(".*\\browsProbe=3\\b.*"), summaries::toString);
         assertTrue(summary.matches(".*\\browsOut=4\\b.*"), summaries::toString);
+        assertTrue(summary.contains("join=1 tables=a;b buildTables=a probeTables=b estRows=1.0"));
+    }
+
+    @Test
+    void failedNestedOpenCleansUpOnceAndNeverOpenedJoinDoesNotLog() throws Exception {
+        TestListOperator leaf = new TestListOperator(List.<Object[]>of(new Object[]{1L}));
+        Operator failing = new Operator() {
+            @Override public void open() { throw new IllegalStateException("failure"); }
+            @Override public Object[] next() { return null; }
+            @Override public void close() { }
+        };
+        Operator inner = join(leaf, failing, 0, 0);
+        TestListOperator other = new TestListOperator(List.of());
+        Operator outer = join(inner, other, 0, 0);
+        Path log = Path.of("logs/engine.log");
+        long before = Files.readAllLines(log).size();
+        join(new TestListOperator(List.of()), new TestListOperator(List.of()), 0, 0).close();
+        assertThrows(IllegalStateException.class, outer::open);
+        outer.close();
+        inner.close();
+        assertTrue(leaf.closed());
+        assertTrue(other.closed());
+        assertEquals(2, Files.readAllLines(log).stream().skip(before)
+                .filter(line -> line.contains(",HashJoinOperator,") && line.contains("rowsBuild=")).count());
+    }
+
+    @Test
+    void closeFailureStillClosesOtherChildAndLogsOnlyOnce() throws Exception {
+        Operator badClose = new Operator() {
+            @Override public void open() { }
+            @Override public Object[] next() { return null; }
+            @Override public void close() { throw new IllegalStateException("close failure"); }
+        };
+        TestListOperator probe = new TestListOperator(List.of());
+        Operator join = join(badClose, probe, 0, 0);
+        long before = Files.readAllLines(Path.of("logs/engine.log")).size();
+        join.open();
+        assertThrows(IllegalStateException.class, join::close);
+        join.close();
+        assertTrue(probe.closed());
+        assertEquals(1, Files.readAllLines(Path.of("logs/engine.log")).stream().skip(before)
+                .filter(line -> line.contains(",HashJoinOperator,") && line.contains("rowsBuild=")).count());
     }
 
     private static Operator join(Operator build, Operator probe, int buildKey, int probeKey) {
         return assertInstanceOf(Operator.class, create("HashJoinOperator",
-                new Class<?>[] {Operator.class, Operator.class, int.class, int.class},
-                build, probe, buildKey, probeKey));
+                new Class<?>[] {Operator.class, Operator.class, int.class, int.class, int.class,
+                        List.class, List.class, List.class, double.class},
+                build, probe, buildKey, probeKey, 1, List.of("a", "b"), List.of("a"), List.of("b"), 1.0));
     }
 }

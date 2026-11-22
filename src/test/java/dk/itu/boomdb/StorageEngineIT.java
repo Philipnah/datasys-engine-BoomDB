@@ -90,9 +90,9 @@ class StorageEngineIT {
         TableCatalog catalog = new CatalogStore(directory).load("trips").orElseThrow();
         assertEquals(4, catalog.partitions().size());
         assertEquals(List.of(
-                new ColumnStatistics("city", "Aarhus", "Copenhagen"),
-                new ColumnStatistics("distance", "12", "187"),
-                new ColumnStatistics("price", "23.5", "301.0")),
+                new ColumnStatistics("city", "Aarhus", "Copenhagen", 2),
+                new ColumnStatistics("distance", "12", "187", 2),
+                new ColumnStatistics("price", "23.5", "301.0", 2)),
                 catalog.partitions().getFirst().statistics());
         assertEquals(4, catalog.partitions().stream().map(PartitionMetadata::fileName).distinct().count());
         assertEquals(4, Files.list(directory.resolve("data")).count());

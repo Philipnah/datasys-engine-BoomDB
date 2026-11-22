@@ -28,11 +28,14 @@ class CatalogStoreTest {
         store.save(base);
         store.commit(base, List.of(original, partition(1, "winner.bin")));
 
-        assertEquals(3, store.commit(base, List.of(original, partition(1, "loser.bin"))));
+        PartitionMetadata loser = new PartitionMetadata(1, "loser.bin", 3,
+                List.of(new ColumnStatistics("id", "1", "2", 2)));
+        assertEquals(3, store.commit(base, List.of(original, loser)));
 
         TableCatalog current = store.load("t").orElseThrow();
         assertEquals(List.of("original.bin", "winner.bin", "loser.bin"), names(current));
         assertEquals(List.of(0, 1, 2), current.partitions().stream().map(PartitionMetadata::id).toList());
+        assertEquals(loser.statistics(), current.partitions().getLast().statistics());
         assertEquals(current, new CatalogStore(directory).load("t").orElseThrow());
     }
 
@@ -233,7 +236,7 @@ class CatalogStoreTest {
 
     @Test
     void snapshotsDefensivelyCopyPartitionListsAndStatistics(@TempDir Path directory) {
-        List<ColumnStatistics> stats = new ArrayList<>(List.of(new ColumnStatistics("id", "1", "2")));
+        List<ColumnStatistics> stats = new ArrayList<>(List.of(new ColumnStatistics("id", "1", "2", 2)));
         PartitionMetadata partition = new PartitionMetadata(0, "p.bin", 2, stats);
         List<PartitionMetadata> partitions = new ArrayList<>(List.of(partition));
         List<ColumnSpec> columns = new ArrayList<>(COLUMNS);
@@ -247,14 +250,14 @@ class CatalogStoreTest {
         try (CatalogStore.Snapshot snapshot = store.acquire("t")) {
             assertEquals(COLUMNS, snapshot.table().columns());
             assertEquals(1, snapshot.table().partitions().size());
-            assertEquals(List.of(new ColumnStatistics("id", "1", "2")),
+            assertEquals(List.of(new ColumnStatistics("id", "1", "2", 2)),
                     snapshot.table().partitions().getFirst().statistics());
             assertThrows(UnsupportedOperationException.class, snapshot.table().partitions()::clear);
         }
     }
 
     private static PartitionMetadata partition(int id, String fileName) {
-        return new PartitionMetadata(id, fileName, 1, List.of(new ColumnStatistics("id", "1", "1")));
+        return new PartitionMetadata(id, fileName, 1, List.of(new ColumnStatistics("id", "1", "1", 1)));
     }
 
     private static List<String> names(TableCatalog table) {
