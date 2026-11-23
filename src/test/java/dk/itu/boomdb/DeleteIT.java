@@ -46,7 +46,7 @@ class DeleteIT {
             assertEquals(2, after.version());
             assertEquals(before.partitions().subList(0, 2), after.partitions().subList(0, 2));
             assertEquals(3, after.partitions().size());
-            assertEquals(List.of(new ColumnStatistics("id", "5", "5", 1)),
+            assertEquals(List.of(new ColumnStatistics("id", "5", "5", 1L)),
                     after.partitions().getLast().statistics());
             for (int i = 0; i < before.partitions().size(); i++) {
                 byte[] actual = bytes(directory, before.partitions().get(i));

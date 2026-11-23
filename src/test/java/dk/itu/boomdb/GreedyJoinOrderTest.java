@@ -98,7 +98,7 @@ class GreedyJoinOrderTest {
         };
         int count = ROWS.get(name).intValue();
         var specs = columns.stream().map(c -> new ColumnSpec(c, ColumnType.LONG)).toList();
-        var stats = columns.stream().map(c -> new ColumnStatistics(c, "0", "1", name.equals("C") ? 10 : name.equals("D") ? 1 : 100)).toList();
+        var stats = columns.stream().map(c -> new ColumnStatistics(c, "0", "1", name.equals("C") ? 10L : name.equals("D") ? 1L : 100L)).toList();
         return new TableCatalog(name, specs, 0, List.of(new PartitionMetadata(0, "p", count, stats)));
     }
 }

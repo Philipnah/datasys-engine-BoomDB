@@ -2,6 +2,7 @@ package dk.itu.boomdb;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -29,7 +30,7 @@ class CatalogStoreTest {
         store.commit(base, List.of(original, partition(1, "winner.bin")));
 
         PartitionMetadata loser = new PartitionMetadata(1, "loser.bin", 3,
-                List.of(new ColumnStatistics("id", "1", "2", 2)));
+                List.of(new ColumnStatistics("id", "1", "2", 2L)));
         assertEquals(3, store.commit(base, List.of(original, loser)));
 
         TableCatalog current = store.load("t").orElseThrow();
@@ -223,6 +224,40 @@ class CatalogStoreTest {
     }
 
     @Test
+    void preNdvCatalogCanCoexistWithNewTablesAndRoundTripWithNewPartitions(@TempDir Path directory)
+            throws Exception {
+        Path old = directory.resolve("catalogs/versions/t-v1.json");
+        Files.createDirectories(old.getParent());
+        Files.writeString(old, """
+                {"tableName":"t","columns":[{"name":"id","type":"LONG"}],"version":1,
+                 "partitions":[{"id":0,"fileName":"old.bin","rowCount":4,
+                 "statistics":[{"columnName":"id","min":"1","max":"3"}]}]}
+                """);
+        CatalogStore store = new CatalogStore(directory);
+        store.save(table("fresh", 0));
+        TableCatalog base = store.load("t").orElseThrow();
+        assertNull(base.partitions().getFirst().statistics().getFirst().ndv());
+        assertEquals(2, store.commit(base, List.of(base.partitions().getFirst(), partition(1, "new.bin"))));
+
+        Path mixed = old.resolveSibling("t-v2.json");
+        var partitions = new ObjectMapper().readTree(mixed.toFile()).get("partitions");
+        assertFalse(partitions.get(0).get("statistics").get(0).has("ndv"));
+        assertEquals(1, partitions.get(1).get("statistics").get(0).get("ndv").longValue());
+        TableCatalog reopened = new CatalogStore(directory).load("t").orElseThrow();
+        assertEquals(5, CardinalityEstimator.effectiveNdv(reopened, 0));
+    }
+
+    @Test
+    void malformedCatalogErrorNamesTheFile(@TempDir Path directory) throws Exception {
+        Path bad = directory.resolve("catalogs/versions/bad-v1.json");
+        Files.createDirectories(bad.getParent());
+        Files.writeString(bad, "{");
+        var error = assertThrows(java.io.UncheckedIOException.class,
+                () -> new CatalogStore(directory).load("fresh"));
+        assertTrue(error.getMessage().contains(bad.toString()), error::getMessage);
+    }
+
+    @Test
     void failedPublicationLeavesTheCommittedVersionReadable(@TempDir Path directory)
             throws Exception {
         CatalogStore store = new CatalogStore(directory);
@@ -236,7 +271,7 @@ class CatalogStoreTest {
 
     @Test
     void snapshotsDefensivelyCopyPartitionListsAndStatistics(@TempDir Path directory) {
-        List<ColumnStatistics> stats = new ArrayList<>(List.of(new ColumnStatistics("id", "1", "2", 2)));
+        List<ColumnStatistics> stats = new ArrayList<>(List.of(new ColumnStatistics("id", "1", "2", 2L)));
         PartitionMetadata partition = new PartitionMetadata(0, "p.bin", 2, stats);
         List<PartitionMetadata> partitions = new ArrayList<>(List.of(partition));
         List<ColumnSpec> columns = new ArrayList<>(COLUMNS);
@@ -250,14 +285,14 @@ class CatalogStoreTest {
         try (CatalogStore.Snapshot snapshot = store.acquire("t")) {
             assertEquals(COLUMNS, snapshot.table().columns());
             assertEquals(1, snapshot.table().partitions().size());
-            assertEquals(List.of(new ColumnStatistics("id", "1", "2", 2)),
+            assertEquals(List.of(new ColumnStatistics("id", "1", "2", 2L)),
                     snapshot.table().partitions().getFirst().statistics());
             assertThrows(UnsupportedOperationException.class, snapshot.table().partitions()::clear);
         }
     }
 
     private static PartitionMetadata partition(int id, String fileName) {
-        return new PartitionMetadata(id, fileName, 1, List.of(new ColumnStatistics("id", "1", "1", 1)));
+        return new PartitionMetadata(id, fileName, 1, List.of(new ColumnStatistics("id", "1", "1", 1L)));
     }
 
     private static List<String> names(TableCatalog table) {

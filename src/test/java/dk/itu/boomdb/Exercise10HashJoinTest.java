@@ -122,6 +122,25 @@ class Exercise10HashJoinTest {
         assertTrue(summary.matches(".*\\browsProbe=3\\b.*"), summaries::toString);
         assertTrue(summary.matches(".*\\browsOut=4\\b.*"), summaries::toString);
         assertTrue(summary.contains("join=1 tables=a;b buildTables=a probeTables=b estRows=1.0"));
+        assertTrue(summary.contains("completed=true"));
+    }
+
+    @Test
+    void earlyCloseMarksEmittedCountAsIncomplete() throws Exception {
+        List<Object[]> rows = List.of(new Object[] {1L}, new Object[] {1L});
+        Operator join = join(new TestListOperator(rows), new TestListOperator(rows), 0, 0);
+        Path log = Path.of("logs/engine.log");
+        long before = Files.readAllLines(log).size();
+        join.open();
+        try {
+            assertArrayEquals(new Object[] {1L, 1L}, join.next());
+        } finally {
+            join.close();
+        }
+        List<String> summaries = Files.readAllLines(log).stream().skip(before)
+                .filter(line -> line.contains(",HashJoinOperator,")).toList();
+        assertEquals(1, summaries.size());
+        assertTrue(summaries.getFirst().contains("rowsOut=1 completed=false"));
     }
 
     @Test
@@ -143,8 +162,10 @@ class Exercise10HashJoinTest {
         inner.close();
         assertTrue(leaf.closed());
         assertTrue(other.closed());
-        assertEquals(2, Files.readAllLines(log).stream().skip(before)
-                .filter(line -> line.contains(",HashJoinOperator,") && line.contains("rowsBuild=")).count());
+        List<String> summaries = Files.readAllLines(log).stream().skip(before)
+                .filter(line -> line.contains(",HashJoinOperator,") && line.contains("rowsBuild=")).toList();
+        assertEquals(2, summaries.size());
+        assertTrue(summaries.stream().allMatch(line -> line.contains("completed=false")));
     }
 
     @Test
@@ -158,11 +179,14 @@ class Exercise10HashJoinTest {
         Operator join = join(badClose, probe, 0, 0);
         long before = Files.readAllLines(Path.of("logs/engine.log")).size();
         join.open();
+        assertNull(join.next());
         assertThrows(IllegalStateException.class, join::close);
         join.close();
         assertTrue(probe.closed());
-        assertEquals(1, Files.readAllLines(Path.of("logs/engine.log")).stream().skip(before)
-                .filter(line -> line.contains(",HashJoinOperator,") && line.contains("rowsBuild=")).count());
+        List<String> summaries = Files.readAllLines(Path.of("logs/engine.log")).stream().skip(before)
+                .filter(line -> line.contains(",HashJoinOperator,") && line.contains("rowsBuild=")).toList();
+        assertEquals(1, summaries.size());
+        assertTrue(summaries.getFirst().contains("completed=false"));
     }
 
     private static Operator join(Operator build, Operator probe, int buildKey, int probeKey) {

@@ -37,19 +37,44 @@ NDV throughout filtering and later joins. We do not estimate how filters or
 previous joins change the distinct count. This deliberately coarse assumption
 is one source of estimate error for the later report.
 
-## Development catalog policy
+## Catalog upgrades and rollback
 
-This implementation requires development catalogs created with NDV. As agreed
-for the current engine, we do not migrate old catalogs or support an old binary
-reading the new format. Recreate development data with CREATE and COPY when
-switching formats; do not edit live immutable catalog versions. Missing NDV in
-a nonempty partition is invalid metadata, rather than evidence that the column
-has zero distinct values. Empty tables still estimate zero rows and zero NDV.
+**Roll forward.** The optimizer can open an existing Exercise 10 data
+directory. A missing NDV means the partition's distinct count is unknown.
+If any nonempty partition lacks NDV for a column, the estimator uses the
+pinned table's total row count for that column, effectively assuming distinct
+keys. This can underestimate equality filter and join output. Empty tables
+still estimate zero rows and zero NDV. COPY and DELETE rewrites collect exact
+partition NDV on new files. Untouched partitions keep their existing metadata.
+To get complete NDV immediately, reload the tables into a fresh database.
 
-A production rollout would need optional statistics, a documented fallback,
-and a versioned backfill/downgrade procedure. Those are deferred while stored
-development data is disposable. NDV is added to catalog JSON; the binary
-partition layout does not change.
+**Roll back.** Exercise 10's reader rejects the `ndv` field in any catalog it
+discovers, including retained versions. If you only need the state from
+before the upgrade, restore that backup as `data/` in a separate working
+directory and start Exercise 10 there. The backup contains only writes made
+before it was taken.
+
+To keep changes made since upgrading:
+
+1. Stop every engine process using the database. Copy the entire `data/`
+   directory into a separate working directory and keep the source as a backup.
+2. In the copy, remove the `ndv` property from each entry in every partition's
+   `statistics` array. Check all catalog JSON files directly under
+   `data/catalogs/` and `data/catalogs/versions/`, including retained versions.
+   Keep the other JSON fields, catalog filenames, and binary partition files
+   as they are. Preserve catalog modification times if you want the version
+   retention policy to use the original ages.
+3. Start Exercise 10 from the separate working directory so it uses the
+   converted `data/` copy. Check that your tables open and return the rows
+   you expect before using the copy for writes.
+
+To roll forward again, open the database copy last written by Exercise 10
+with the optimizer. It uses the same fallback for missing NDV. Both versions
+use the same binary partition format.
+
+Catalog read errors identify the file that failed to load. Discovery checks
+both catalog layouts, so a malformed catalog can interrupt access to another
+table even when the other table's catalog is intact.
 
 ## Cardinality estimates
 
@@ -127,7 +152,11 @@ The default is `-j optimized`. Under `-j syntax`, tables fold left to right
 in FROM order and the intermediate always builds, exactly as in Exercise 10.
 Both modes log chosen order, physical build/probe sides, and join estimates.
 Each executed join logs estRows and actual rowsBuild, rowsProbe, and rowsOut
-together when it closes. Join numbers identify logical steps independently of
+together when it closes. For cardinality comparisons, use only
+`completed=true` records. The operator sets this field after it reaches
+end of stream and both children close successfully. Failed or early closes
+log `completed=false` with the counts observed so far.
+Join numbers identify logical steps independently of
 close order; the existing sessionId and statementNumber identify the query.
 Table lists use semicolons inside messages to preserve the existing seven-field
 CSV log layout. GROUP BY and week 12 benchmarks remain outside this change.

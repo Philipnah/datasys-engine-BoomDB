@@ -197,6 +197,7 @@ class Exercise11OptimizerIT {
             String message = event.getMessage().getFormattedMessage();
             var matcher = Pattern.compile("join=(\\d+).*estRows=([^ ]+).*rowsOut=(\\d+)").matcher(message);
             assertTrue(matcher.find(), message);
+            assertTrue(message.contains("completed=true"), message);
             assertTrue(Double.isFinite(Double.parseDouble(matcher.group(2))));
             assertTrue(numbers.add(matcher.group(1)));
             assertNotNull(event.getContextData().getValue("sessionId"));

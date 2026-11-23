@@ -1,6 +1,7 @@
 package dk.itu.boomdb;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -216,8 +217,7 @@ final class CatalogStore {
             try (var files = Files.list(directory)) {
                 for (Path file : files.filter(Files::isRegularFile)
                         .filter(path -> path.getFileName().toString().endsWith(".json")).toList()) {
-                    TableCatalog table = objectMapper.readValue(Files.readAllBytes(file), TableCatalog.class);
-                    validateName(table.tableName());
+                    TableCatalog table = readCatalog(file);
                     String name = file.getFileName().toString();
                     boolean legacy = directory.equals(catalogDirectory)
                             && name.equals(table.tableName() + ".json");
@@ -240,6 +240,21 @@ final class CatalogStore {
             }
         }
         return found;
+    }
+
+    private TableCatalog readCatalog(Path file) {
+        try {
+            TableCatalog table = objectMapper.readValue(file.toFile(), TableCatalog.class);
+            if (table == null) {
+                throw new IllegalArgumentException("expected a catalog object");
+            }
+            validateName(table.tableName());
+            return table;
+        } catch (IOException error) {
+            throw new UncheckedIOException("cannot read catalog " + file + ": " + error.getMessage(), error);
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException("invalid catalog " + file + ": " + error.getMessage(), error);
+        }
     }
 
     private static void validateName(String tableName) {
@@ -357,12 +372,19 @@ record PartitionMetadata(int id, String fileName, int rowCount,
                          List<ColumnStatistics> statistics) {
     PartitionMetadata {
         statistics = List.copyOf(statistics);
-        if (rowCount < 0 || statistics.stream().anyMatch(stat -> stat.ndv() < 0
-                || stat.ndv() > rowCount || (rowCount > 0 && stat.ndv() == 0))) {
-            throw new IllegalArgumentException("invalid partition row count or NDV");
+        if (rowCount < 0) {
+            throw new IllegalArgumentException("invalid partition row count");
+        }
+        for (ColumnStatistics statistic : statistics) {
+            Long ndv = statistic.ndv();
+            if (ndv != null && (ndv < 0 || ndv > rowCount || (rowCount > 0 && ndv == 0))) {
+                throw new IllegalArgumentException("invalid NDV for partition " + id
+                        + " column " + statistic.columnName() + ": " + ndv);
+            }
         }
     }
 }
 
-/** Typed column bounds and the number of distinct values in one partition. */
-record ColumnStatistics(String columnName, String min, String max, long ndv) { }
+/** Typed column bounds and an optional distinct count, absent in pre-optimizer catalogs. */
+record ColumnStatistics(String columnName, String min, String max,
+                        @JsonInclude(JsonInclude.Include.NON_NULL) Long ndv) { }

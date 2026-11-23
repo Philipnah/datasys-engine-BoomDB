@@ -1,5 +1,6 @@
 package dk.itu.boomdb;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /** Pure cardinality estimates based on partition statistics. */
@@ -26,9 +27,20 @@ final class CardinalityEstimator {
         return total;
     }
 
+    /** Falls back to assuming distinct keys if any nonempty partition lacks this statistic. */
     static long effectiveNdv(TableCatalog table, int columnIndex) {
-        return tableNdv(table.partitions().stream()
-                .map(partition -> partition.statistics().get(columnIndex).ndv()).toList());
+        List<Long> counts = new ArrayList<>();
+        for (PartitionMetadata partition : table.partitions()) {
+            if (partition.rowCount() == 0) {
+                continue;
+            }
+            Long ndv = partition.statistics().get(columnIndex).ndv();
+            if (ndv == null) {
+                return baseRows(table.partitions());
+            }
+            counts.add(ndv);
+        }
+        return tableNdv(counts);
     }
 
     static double filterRows(double inputRows, Comparison comparison, long ndv) {

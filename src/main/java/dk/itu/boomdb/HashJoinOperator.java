@@ -101,22 +101,28 @@ public final class HashJoinOperator implements Operator {
 
     @Override
     public void close() {
-        if (!active) return;
+        if (!active) {
+            return;
+        }
         active = false;
+        boolean childrenClosed = false;
         try {
-            build.close();
-        } finally {
             try {
-                probe.close();
+                build.close();
             } finally {
-                rowsByKey.clear();
-                matches = Collections.emptyIterator();
-                probeRow = null;
-                exhausted = true;
-                LOGGER.debug("join={} tables={} buildTables={} probeTables={} estRows={} rowsBuild={} rowsProbe={} rowsOut={}",
-                        joinNumber, tableList(tables), tableList(buildTables),
-                        tableList(probeTables), estimatedRows, rowsBuild, rowsProbe, rowsOut);
+                probe.close();
             }
+            childrenClosed = true;
+        } finally {
+            // Only end of stream proves that rowsOut is the full cardinality.
+            boolean completed = exhausted && childrenClosed;
+            rowsByKey.clear();
+            matches = Collections.emptyIterator();
+            probeRow = null;
+            exhausted = true;
+            LOGGER.debug("join={} tables={} buildTables={} probeTables={} estRows={} rowsBuild={} rowsProbe={} rowsOut={} completed={}",
+                    joinNumber, tableList(tables), tableList(buildTables), tableList(probeTables),
+                    estimatedRows, rowsBuild, rowsProbe, rowsOut, completed);
         }
     }
 
