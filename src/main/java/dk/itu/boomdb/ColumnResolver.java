@@ -6,7 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** Resolves unqualified columns against FROM-ordered schemas for binding and planning. */
+/** Resolves unqualified columns against schemas in the supplied order. */
 final class ColumnResolver {
     private final Map<String, ResolvedColumn> columns = new HashMap<>();
     private final Set<String> ambiguous = new HashSet<>();
@@ -38,6 +38,6 @@ final class ColumnResolver {
         return column;
     }
 
-    /** Positions are table-local for scans and FROM-concatenated for intermediate rows. */
+    /** Positions are table-local for scans and concatenated in supplied schema order for rows. */
     record ResolvedColumn(String tableName, int columnIndex, int joinedIndex, ColumnType type) { }
 }

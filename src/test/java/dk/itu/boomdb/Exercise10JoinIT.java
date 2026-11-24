@@ -45,8 +45,7 @@ class Exercise10JoinIT {
         Path stdout = directory.resolve("stdout.csv");
         Path stderr = directory.resolve("stderr.log");
         // Use the project's real launcher and a fresh working directory, as LauncherIT does.
-        Process process = new ProcessBuilder(Path.of("engine.sh").toAbsolutePath().toString(),
-                "-f", script.toString()).directory(directory.toFile())
+        Process process = TestLauncher.command("-f", script.toString()).directory(directory.toFile())
                 .redirectOutput(stdout.toFile()).redirectError(stderr.toFile()).start();
 
         assertTrue(process.waitFor(30, TimeUnit.SECONDS), "engine did not finish within 30 seconds");
@@ -63,7 +62,7 @@ class Exercise10JoinIT {
         long before = Files.readAllLines(log).size();
 
         List<Object[]> rows = assertDoesNotThrow(
-                () -> new Executor(storage).execute(Exercise10TestData.QUERIES.get(2)));
+                () -> new Executor(storage, JoinMode.SYNTAX).execute(Exercise10TestData.QUERIES.get(2)));
 
         assertEquals(golden(3), sortedRows(rows));
         List<String> summaries = Files.readAllLines(log).stream().skip(before)

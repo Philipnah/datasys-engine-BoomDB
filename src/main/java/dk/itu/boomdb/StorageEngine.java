@@ -437,11 +437,14 @@ public final class StorageEngine {
             }
 
             MinMax minMax = StorageSupport.minMax(column.type(), values);
+            long ndv = new HashSet<>(values).size();
             statistics.add(new ColumnStatistics(column.name(),
-                    String.valueOf(minMax.min()), String.valueOf(minMax.max())));
+                    String.valueOf(minMax.min()), String.valueOf(minMax.max()), ndv));
             LOGGER.debug("creating statistics for table={} partition={} column={} min={} max={}",
                     clean(tableName), partitionId, clean(column.name()),
                     clean(minMax.min()), clean(minMax.max()));
+            LOGGER.debug("creating statistics for table={} partition={} column={} rows={} ndv={}",
+                    clean(tableName), partitionId, clean(column.name()), rows.size(), ndv);
         }
 
         return List.copyOf(statistics);

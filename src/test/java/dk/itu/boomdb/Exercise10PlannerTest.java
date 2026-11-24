@@ -98,7 +98,7 @@ class Exercise10PlannerTest {
                 "o_custname", "c_name", "c_city", "ct_city");
 
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-                () -> new Planner(storage).plan(statement));
+                () -> new Planner(storage, JoinMode.SYNTAX).plan(statement));
 
         assertTrue(error.getMessage().contains("cities"), error::getMessage);
         assertTrue(error.getMessage().toLowerCase().contains("reorder"), error::getMessage);
@@ -111,7 +111,7 @@ class Exercise10PlannerTest {
         SelectStatement statement = select(List.of("orders", "customers"), List.of());
 
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-                () -> new Planner(storage).plan(statement));
+                () -> new Planner(storage, JoinMode.SYNTAX).plan(statement));
         assertTrue(error.getMessage().toLowerCase().contains("reorder"), error::getMessage);
     }
 
@@ -122,7 +122,7 @@ class Exercise10PlannerTest {
                 "o_custname", "c_name", "o_prodname", "c_city");
 
         IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
-                () -> new Planner(storage).plan(statement));
+                () -> new Planner(storage, JoinMode.SYNTAX).plan(statement));
         assertTrue(error.getMessage().toLowerCase().contains("predicate"), error::getMessage);
     }
 
@@ -133,7 +133,7 @@ class Exercise10PlannerTest {
 
     private static Operator plan(StorageEngine storage, SelectStatement statement) {
         new Binder(storage).bind(statement);
-        return new Planner(storage).plan(statement);
+        return new Planner(storage, JoinMode.SYNTAX).plan(statement);
     }
 
     private static Operator build(Operator join) {
