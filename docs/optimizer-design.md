@@ -1,172 +1,29 @@
-# Join optimizer design
+# Statistics:
+The planner knows row count per partition in the catalog for any given table.
+The number of distinct values per column, NDV, is also stored in the catalog per partition alongside the min/max statistics.
 
-BoomDB uses a greedy join optimizer for Exercise 11. It estimates the output
-of each candidate equi-join from catalog statistics, chooses small intermediate
-results first, and builds each hash table from the smaller estimated input.
-`-j syntax` preserves Exercise 10's FROM-order plan for comparisons and forced
-join orders. Optimization changes the plan, while SELECT * columns remain in
-FROM-list order and duplicate rows retain their multiplicity.
+# Where they live and how they merge:
+NDV is the number of distinct values of column of the whole table.
+NDV should live in catalog for each partition in a table.
+Using Max NDV approach is the easiest to implement compared to HyperLogLog (I think we should do this @Thorbjørn, @Philip agrees), but it can also be very wrong and is not necessarily accurate. It is simply the lower bound of the possible true NDV value, so depending on the data it might be pretty accurate or completely off the mark.
 
-## Statistics and collection
+# Roll forward:
+You can roll forward by running through the partition files referenced in the catalog, collecting the data needed for the statistic, and adding the statistic to the catalog. 
+You could roll backward by deleting the statistic for each partition in the catalog file for every table.
 
-The catalog stores row count per partition and min, max, and number of distinct
-values (NDV) per partition column. NDV is exact within each partition: a
-`HashSet` counts typed LONG, DOUBLE, and STRING values when the shared
-partition-writing path computes statistics. COPY creates these summaries, and
-DELETE recomputes them for rewritten partitions. Unchanged partitions carry
-their existing summaries into the new catalog version.
+# The estimator:
+### For Equality filter:
+col = x |R| / ndv(col)
+Reason for using this formula: decent estimate, though skewed by the assumption of uniformity: that every value is equally frequent.
 
-Every created NDV has a separate log line containing table, partition, column,
-rows, and ndv, alongside the existing min/max logs. Collection is bounded by
-partition size, but exact sets are unsuitable for very large partitions. At
-billion-row scale we would consider mergeable HyperLogLog sketches, accepting
-their estimation error instead of retaining every distinct value.
+### For Range filter col<x, col>c :
+|R| / 3 or interpolate from min/max
+Reason for using formula: Some SQL people decided this was the way to do it ages ago, and it is apparently still used in some database systems, so who are we to argue with the pros? Chosen for a lack of known better.
 
-## Table NDV and merging
+### Estimate Result Rows of Equality Joins:
+|R| · |S| / max(ndv(R.a), ndv(S.b))
+Reason for using formula: Containment: Every key on the smaller key domain also appears and thus find partners on the larger one. Uniformity, assuming that every key has the same number of rows on each side. 
+Not a true assumption, but an attempt at an estimation.
 
-When every nonempty partition has NDV, we approximate a column's table NDV
-with the maximum of its partition NDVs. An empty table has NDV zero.
-The maximum is a lower bound on the true union's
-NDV; the sum is an upper bound. Maximum merging is simple and works well when
-partitions repeat similar domains, but can severely undercount disjoint domains
-and consequently overestimate equality matches. This is our approximation,
-not a claim of an exact merge.
-
-The planner uses NDV across all partitions in the statement's pinned table
-catalog, even when filters prune some partitions. It uses the same base-column
-NDV throughout filtering and later joins. We do not estimate how filters or
-previous joins change the distinct count. This deliberately coarse assumption
-is one source of estimate error for the later report.
-
-## Catalog upgrades and rollback
-
-**Roll forward.** The optimizer can open an existing Exercise 10 data
-directory. A missing NDV means the partition's distinct count is unknown.
-If any nonempty partition lacks NDV for a column, the estimator uses the
-largest partition row count across the entire pinned table as that column's
-fallback NDV, including partitions that already have NDV. For partitions
-containing 20 and 15 rows, the fallback NDV is 20; the base row count remains
-their sum, 35.
-
-This fallback is a heuristic, with no guarantee of being a lower or upper
-bound on the true table NDV. Repeated values can make it too high, while
-disjoint domains can make it too low. Compared with the previous total-row
-fallback, the smaller denominator increases equality-filter estimates and
-can increase join estimates; it does not guarantee better accuracy. Empty
-partitions do not trigger the fallback, and empty tables still estimate zero
-rows and zero NDV. COPY and DELETE rewrites collect exact partition NDV on
-new files. Untouched partitions keep their existing metadata. To get complete
-NDV immediately, reload the tables into a fresh database.
-
-**Roll back.** Exercise 10's reader rejects the `ndv` field in any catalog it
-discovers, including retained versions. If you only need the state from
-before the upgrade, restore that backup as `data/` in a separate working
-directory and start Exercise 10 there. The backup contains only writes made
-before it was taken.
-
-To keep changes made since upgrading:
-
-1. Stop every engine process using the database. Copy the entire `data/`
-   directory into a separate working directory and keep the source as a backup.
-2. In the copy, remove the `ndv` property from each entry in every partition's
-   `statistics` array. Check all catalog JSON files directly under
-   `data/catalogs/` and `data/catalogs/versions/`, including retained versions.
-   Keep the other JSON fields, catalog filenames, and binary partition files
-   as they are. Preserve catalog modification times if you want the version
-   retention policy to use the original ages.
-3. Start Exercise 10 from the separate working directory so it uses the
-   converted `data/` copy. Check that your tables open and return the rows
-   you expect before using the copy for writes.
-
-To roll forward again, open the database copy last written by Exercise 10
-with the optimizer. It uses the same fallback for missing NDV. Both versions
-use the same binary partition format.
-
-Catalog read errors identify the file that failed to load. Discovery checks
-both catalog layouts, so a malformed catalog can interrupt access to another
-table even when the other table's catalog is intact.
-
-## Cardinality estimates
-
-The estimator consists of small pure functions over catalog numbers. It reads
-no data files and never refreshes catalogs during a statement.
-
-- **Base table:** sum row counts of the partitions surviving min/max pruning.
-- **Equality filter:** `filteredRows = inputRows / ndv(column)`.
-- **Range filter:** for both `<` and `>`, `filteredRows = inputRows / 3`.
-- **Equi-join:** `joinedRows = leftRows * rightRows / max(leftNdv, rightNdv)`.
-
-Apply each local filter below the joins; multiply selectivities for AND.
-Equality assumes uniform frequencies. The join formula additionally assumes
-containment: values from the smaller distinct domain occur in the larger
-domain. Multiplying filter selectivities assumes independence. Skew, correlated
-columns, disjoint join domains, and coarse max merging can violate these
-assumptions. Estimates influence plan selection, never which rows are returned.
-
-Retain fractional double estimates through the whole chain instead of rounding
-each stage or forcing an estimate to at least one row. Empty inputs estimate
-zero; denominators are guarded to at least one. Reject negative or non-finite
-estimate inputs. Sum base row counts as long values with overflow detection;
-join calculations avoid overflowing a long product and saturate double
-overflow at `Double.MAX_VALUE` so comparison and logging remain finite.
-
-[Selinger et al., 1979, Table 1](https://web.eecs.umich.edu/~michjc/eecs584/Papers/selinger_1979.pdf)
-describes uniform equality selectivity, the maximum-domain equality-join
-denominator, multiplicative AND selectivity, and a one-third fallback for
-open-ended comparisons. Applying one third to every supported range filter
-is our simplification; we do not interpolate from min/max in this release.
-The join formula and unchanged base-column NDV assumption also follow
-Exercise 11 / lecture 10.
-
-## Greedy ordering and graph restrictions
-
-1. Build each table's pruned, filtered row estimate.
-2. Evaluate every join predicate and select the pair with the smallest
-   estimated output.
-3. Among remaining tables connected to the joined set, evaluate each candidate
-   extension and select the smallest estimated output. Repeat until complete.
-4. At each physical join, build from the smaller estimated input. On equal
-   estimates, build from the logical left/intermediate input.
-
-Break ordering ties by original FROM positions, then predicate position.
-Orient the initial logical pair in FROM order. Log every evaluated candidate
-and the chosen order so the decision can be explained from the statistics.
-
-Greedy smallest-intermediate-first is the course baseline and our chosen
-alternative to dynamic programming or exhaustive enumeration. It is simpler,
-but does not promise the globally cheapest plan.
-[Leis et al., 2015](https://vldb.org/pvldb/vol9/p204-leis.pdf) motivates measuring
-cardinality errors: inaccurate estimates can dominate plan quality even when
-the search and cost model are more sophisticated.
-
-Optimized mode accepts connected tree-shaped join graphs regardless of whether
-the FROM prefix itself is connected. Disconnected graphs require a cross
-product, which the engine does not implement, so they fail clearly. We retain
-Exercise 10's restriction to one connecting predicate per added table: cycles
-and parallel predicates are rejected explicitly, never silently discarded.
-Syntax mode retains its original FROM-prefix validation and errors.
-
-## Physical layouts, snapshots, and observability
-
-HashJoinOperator emits build columns followed by probe columns. The planner
-tracks that actual schema at each join and resolves the next key against it.
-One final column permutation restores the original FROM schema when needed.
-The permutation uses table identity and local column position, allowing
-unreferenced duplicate column names without confusing their output positions.
-
-Executor pins all table catalogs before binding or planning. Both estimates
-and scans use those same objects, so concurrent COPY or DELETE affects a later
-statement, not the current statement's rows or statistics.
-
-The default is `-j optimized`. Under `-j syntax`, tables fold left to right
-in FROM order and the intermediate always builds, exactly as in Exercise 10.
-Both modes log chosen order, physical build/probe sides, and join estimates.
-Each executed join logs estRows and actual rowsBuild, rowsProbe, and rowsOut
-together when it closes. For cardinality comparisons, use only
-`completed=true` records. The operator sets this field after it reaches
-end of stream and both children close successfully. Failed or early closes
-log `completed=false` with the counts observed so far.
-Join numbers identify logical steps independently of
-close order; the existing sessionId and statementNumber identify the query.
-Table lists use semicolons inside messages to preserve the existing seven-field
-CSV log layout. GROUP BY and week 12 benchmarks remain outside this change.
+# The heuristic:
+We decided to use the greedy operator ordering, as it is quite effective, uses the important metadata/statistics (NDV and rowcount) to choose the ordering, and because it is simpler to implement than the dynamic programming solution.
