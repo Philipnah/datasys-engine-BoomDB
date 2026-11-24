@@ -244,7 +244,7 @@ class CatalogStoreTest {
         assertFalse(partitions.get(0).get("statistics").get(0).has("ndv"));
         assertEquals(1, partitions.get(1).get("statistics").get(0).get("ndv").longValue());
         TableCatalog reopened = new CatalogStore(directory).load("t").orElseThrow();
-        assertEquals(5, CardinalityEstimator.effectiveNdv(reopened, 0));
+        assertEquals(4, CardinalityEstimator.effectiveNdv(reopened, 0));
     }
 
     @Test

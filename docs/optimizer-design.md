@@ -24,8 +24,9 @@ their estimation error instead of retaining every distinct value.
 
 ## Table NDV and merging
 
-We approximate a column's table NDV with the maximum of its partition NDVs.
-An empty table has NDV zero. The maximum is a lower bound on the true union's
+When every nonempty partition has NDV, we approximate a column's table NDV
+with the maximum of its partition NDVs. An empty table has NDV zero.
+The maximum is a lower bound on the true union's
 NDV; the sum is an upper bound. Maximum merging is simple and works well when
 partitions repeat similar domains, but can severely undercount disjoint domains
 and consequently overestimate equality matches. This is our approximation,
@@ -42,11 +43,20 @@ is one source of estimate error for the later report.
 **Roll forward.** The optimizer can open an existing Exercise 10 data
 directory. A missing NDV means the partition's distinct count is unknown.
 If any nonempty partition lacks NDV for a column, the estimator uses the
-pinned table's total row count for that column, effectively assuming distinct
-keys. This can underestimate equality filter and join output. Empty tables
-still estimate zero rows and zero NDV. COPY and DELETE rewrites collect exact
-partition NDV on new files. Untouched partitions keep their existing metadata.
-To get complete NDV immediately, reload the tables into a fresh database.
+largest partition row count across the entire pinned table as that column's
+fallback NDV, including partitions that already have NDV. For partitions
+containing 20 and 15 rows, the fallback NDV is 20; the base row count remains
+their sum, 35.
+
+This fallback is a heuristic, with no guarantee of being a lower or upper
+bound on the true table NDV. Repeated values can make it too high, while
+disjoint domains can make it too low. Compared with the previous total-row
+fallback, the smaller denominator increases equality-filter estimates and
+can increase join estimates; it does not guarantee better accuracy. Empty
+partitions do not trigger the fallback, and empty tables still estimate zero
+rows and zero NDV. COPY and DELETE rewrites collect exact partition NDV on
+new files. Untouched partitions keep their existing metadata. To get complete
+NDV immediately, reload the tables into a fresh database.
 
 **Roll back.** Exercise 10's reader rejects the `ndv` field in any catalog it
 discovers, including retained versions. If you only need the state from

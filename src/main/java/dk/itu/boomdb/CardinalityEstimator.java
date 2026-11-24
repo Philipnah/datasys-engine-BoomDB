@@ -19,6 +19,7 @@ final class CardinalityEstimator {
         return maximum;
     }
 
+    /** Sums row counts of surviving partitions, detecting overflow. */
     static long baseRows(List<PartitionMetadata> partitions) {
         long total = 0;
         for (PartitionMetadata partition : partitions) {
@@ -27,7 +28,11 @@ final class CardinalityEstimator {
         return total;
     }
 
-    /** Falls back to assuming distinct keys if any nonempty partition lacks this statistic. */
+    /**
+     * Uses the maximum partition NDV when every nonempty partition has this statistic.
+     * Otherwise, falls back to the largest partition row count across the pinned table.
+     * This fallback is a heuristic and need not be a lower bound on the true table NDV.
+     */
     static long effectiveNdv(TableCatalog table, int columnIndex) {
         List<Long> counts = new ArrayList<>();
         for (PartitionMetadata partition : table.partitions()) {
@@ -36,7 +41,11 @@ final class CardinalityEstimator {
             }
             Long ndv = partition.statistics().get(columnIndex).ndv();
             if (ndv == null) {
-                return baseRows(table.partitions());
+                // This fallback can overestimate or underestimate actual NDV. Empty partitions do not trigger it.
+                return table.partitions().stream()
+                        .mapToLong(PartitionMetadata::rowCount)
+                        .max()
+                        .orElse(0);
             }
             counts.add(ndv);
         }
