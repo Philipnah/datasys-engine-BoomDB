@@ -7,7 +7,7 @@ Join order is optimized by default. To force joins in the order listed in `FROM`
 use syntax mode: `./engine.sh -j syntax -f script.sql`. The `-j optimized` or
 `-j syntax` option can appear before or after the `-c` or `-f` pair.
 
-### Exercise 12 join-order benchmark
+### Exercise 12 join benchmark
 
 Build BoomDB and run the benchmark from the repository root with Java 25 or
 later, Maven, and `uv`. The runner uses Python 3.12 and Matplotlib for the chart.
@@ -54,9 +54,9 @@ until it prints them, so its heap requirement can grow with repetitions.
 
 Each run prints its own directory under `target/join-order-benchmark/`.
 
-- `runtime.png` plots each configuration's median with whiskers from its minimum
-  to its maximum. `runtime-summary.csv` contains those values and `timings.csv`
-  records individual runtimes and chosen join orders.
+- `runtime.png` shows three colored bars per configuration for the minimum,
+  median, and maximum runtime. `runtime-summary.csv` contains those values and
+  `timings.csv` records individual runtimes and chosen join orders.
 - `join-sizes.csv` gives estimated and actual output rows by configuration and
   join step, along with the physical build and probe sides.
 - `analysis.sql` loads `engine-log.csv` and `runs.csv` into BoomDB and joins them

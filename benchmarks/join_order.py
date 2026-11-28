@@ -2,7 +2,7 @@
 # requires-python = ">=3.12"
 # dependencies = ["matplotlib==3.11.2"]
 # ///
-"""Run the Exercise 12 join-order benchmark against the packaged BoomDB CLI."""
+"""Run the Exercise 12 join benchmark against the packaged BoomDB CLI."""
 
 import argparse
 import csv
@@ -269,16 +269,23 @@ def write_runtime_report(directory, method, timings):
     configs, _, medians, lows, highs = zip(*summary)
     figure = Figure(figsize=(7, 4), layout="constrained")
     axis = figure.subplots()
-    axis.errorbar(configs, medians,
-                  yerr=([mid - low for mid, low in zip(medians, lows)],
-                        [high - mid for mid, high in zip(medians, highs)]),
-                  fmt="o", markersize=4, capsize=4, color="#245b82")
-    for config, low, high in zip(configs, lows, highs):
-        axis.annotate(f"{low}–{high}", (config, high), xytext=(0, 7),
-                      textcoords="offset points", ha="center", fontsize=9)
-    axis.margins(y=0.10)
+    centers = range(len(configs))
+    width = 0.24
+    # Place the median on each configuration tick and offset the range endpoints.
+    for offset, label, values, color in (
+        (-1, "Minimum", lows, "#0072B2"),
+        (0, "Median", medians, "#E69F00"),
+        (1, "Maximum", highs, "#009E73"),
+    ):
+        positions = [center + offset * width for center in centers]
+        bars = axis.bar(positions, values, width=width, label=label, color=color)
+        axis.bar_label(bars, fmt="%g", padding=3, fontsize=8)
+    axis.set_xticks(centers, configs)
+    axis.margins(y=0.20)
     axis.set(xlabel="Join configuration", ylabel="SELECT runtime (ms)", ylim=(0, None),
-             title=f"Join-order benchmark · median and range of {method.repetitions} runs")
+             title="Join benchmark")
+    axis.legend(loc="upper center", ncols=3, frameon=False)
+    axis.set_axisbelow(True)
     axis.grid(axis="y", alpha=0.3)
     figure.savefig(directory / "runtime.png", dpi=220)
 
